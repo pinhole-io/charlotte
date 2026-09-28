@@ -4,6 +4,10 @@ Charlotte is a Rust SDK for a web-research agent.
 
 It builds on [superglue](https://github.com/Bioto/superglue), [notepad](https://github.com/Bioto/notepad), and [playwright-rs](https://crates.io/crates/playwright-rs).
 
+## Hard dependency
+
+Superglue is a required dependency. This crate does not build without it. Notepad is also required, and Charlotte enables notepad's `superglue` feature.
+
 ## Sibling checkout layout
 
 `Cargo.toml` depends on sibling crates with `path = "../superglue"` and `path = "../notepad"`.
