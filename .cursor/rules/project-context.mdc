@@ -1,0 +1,40 @@
+---
+description: Charlotte browser-research SDK — superglue tools, Playwright, safety
+alwaysApply: true
+---
+
+# Charlotte
+
+Web-research agent SDK at `projects/charlotte/`. Built on sibling [`superglue`](../superglue) and `playwright-rs`.
+
+## Tools
+
+Register via `register_charlotte_tools`:
+
+- `navigate`, `web_search`, `page_content`, `page_markdown`, `list_links`, `scroll`, `site_crawl_chunks`, `agentic_crawl`, and others — see tool schemas for parameters and behavior
+- `page_markdown`: MarkItDown-style body→Markdown; optional `focus` ranks relevant sections
+- Optional brief expansion: `expand_user_request_to_research_brief` (LLM, no tools) — reflects user query; injects runtime **Search stack** operational rules (backend, site: limits, cooldown) into Method, not extra task constraints
+
+## Browser concurrency
+
+- One shared Chromium page per `BrowserHandle`.
+- All page access is **mutex-serialized** — do not bypass the handle for “quick” tool calls.
+
+## Safety (do not weaken)
+
+- `UrlPolicy` and private-IP blocking are intentional SSRF guards.
+- Optional robots.txt respect — do not skip for convenience in production paths.
+- Tracker/ad blocking in `blocklist.rs` is **best-effort**, not a security boundary.
+
+## Playwright version
+
+Match `playwright_rs::PLAYWRIGHT_VERSION`:
+
+```bash
+npx playwright@<version> install chromium
+```
+
+## Testing
+
+- LLM paths: Wiremock (`tests/brief_wiremock.rs`).
+- Playwright integration tests: `#[ignore]` — run explicitly when browsers are installed.

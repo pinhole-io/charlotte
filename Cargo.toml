@@ -1,0 +1,44 @@
+[package]
+name = "charlotte"
+version = "0.1.0"
+edition = "2024"
+description = "Web research SDK: superglue agent \"Charlotte\" with Playwright-backed tools"
+license = "BSD-4-Clause"
+# Align with playwright-rs MSRV (see https://crates.io/crates/playwright-rs)
+rust-version = "1.88"
+
+[dependencies]
+anyhow = "1.0.103"
+async-trait = "0.1"
+base64 = "0.22"
+clap = { version = "4.6.2", features = ["derive", "env"] }
+htmd = "0.5"
+playwright-rs = "0.10"
+qdrant-client = "1"
+regex = "1"
+scraper = "0.23"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+secrecy = { version = "0.10", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+superglue = { path = "../superglue" }
+notepad = { path = "../notepad", default-features = false, features = ["superglue"] }
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
+tracing = "0.1"
+url = "2"
+urlencoding = "2"
+pdf-extract = "0.12.0"
+calamine = "0.36.1"
+docx-rs = "0.4.22"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-util"] }
+wiremock = "0.6"
+
+[features]
+default = []
+synthesize = ["notepad/synthesize"]
+

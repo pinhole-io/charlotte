@@ -1,0 +1,26 @@
+---
+description: Charlotte Rust conventions — HTTP client, blocklist, browser config
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Charlotte Rust conventions
+
+## HTTP / LLM client
+
+- Retry and rate limits via `HTTP_*` env vars (see README).
+- Use Wiremock in tests; avoid live API calls in default `cargo test`.
+
+## BrowserConfig defaults
+
+- `block_trackers_and_ads`, `block_fonts`, `performance_launch_args` — document behavior changes in README when toggling.
+- Extend `src/blocklist.rs` for new hosts; keep lists maintainable, not exhaustive.
+
+## Errors and deps
+
+- `thiserror` for library errors.
+- Path dep: `superglue = { path = "../superglue" }` — API changes may need loom coordination.
+
+## MSRV
+
+- `rust-version` follows **playwright-rs** (currently 1.88+).
