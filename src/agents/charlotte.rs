@@ -2,7 +2,7 @@
 
 use superglue::agents::AgentSpec;
 
-use crate::context::utc_now_context_line;
+use crate::agents::context::utc_now_context_line;
 
 /// Web research agent using browser tools in the tool registry.
 pub fn charlotte_agent_spec() -> AgentSpec {

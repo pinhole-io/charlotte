@@ -4,9 +4,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 
+use crate::browser::pool::{BrowserPool, DEFAULT_BROWSER_POOL_CAP};
 use crate::browser::{BrowserConfig, BrowserHandle, NavigateOptions};
 use crate::error::CharlotteError;
-use crate::pool::{BrowserPool, DEFAULT_BROWSER_POOL_CAP};
 
 pub const SCRAPE_MANY_MAX_URLS: usize = 20;
 pub const SCRAPE_MANY_DEFAULT_MAX_TOTAL_TEXT_CHARS: usize = 100_000;

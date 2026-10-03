@@ -16,7 +16,7 @@ use superglue::systemone::{
 use superglue::tools::ToolRegistry;
 
 use crate::CharlotteError;
-use crate::context::utc_now_context_line;
+use crate::agents::context::utc_now_context_line;
 use crate::search::{SearchBackendKind, SearchConfig};
 
 const BRIEF_EXPANDER_SYSTEM: &str = r#"You plan tasks for a web-research agent with browser and search tools registered at runtime (web_search, navigate, page_markdown, list_links, notepad_*, site_crawl_chunks, agentic_crawl, etc.).

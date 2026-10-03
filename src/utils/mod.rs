@@ -1,6 +1,5 @@
-//! Shared helpers and optional integrations (blocklists, vector store tools, etc.).
+//! Optional integrations (vector store tools).
 
-pub(crate) mod blocklist;
 pub mod qdrant;
 /// Direct Qdrant CRUD-style helpers for scripts (outside the agent).
 pub mod qdrant_crud;

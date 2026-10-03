@@ -22,9 +22,9 @@ use superglue::providers::{ProviderCredentials, ProviderId};
 
 use crate::CharlotteError;
 use crate::browser::BrowserHandle;
-use crate::extract::{extract_structured_json, summarize_markdown};
-use crate::robots::RobotsFetcher;
-use crate::url_policy::UrlPolicy;
+use crate::browser::url_policy::UrlPolicy;
+use crate::crawl::robots::RobotsFetcher;
+use crate::ingest::extract::{extract_structured_json, summarize_markdown};
 
 pub use handle_actor::HandlePageActor;
 pub use sidecar::{PageActor, ScriptedPageActor, UvSidecar};

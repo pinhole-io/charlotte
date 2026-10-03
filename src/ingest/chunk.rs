@@ -133,7 +133,7 @@ fn paragraph_chunks(text: &str, merge_under: usize) -> Vec<ChunkDraft> {
 }
 
 fn hierarchical_markdown(text: &str, max_section_chars: usize, overlap: usize) -> Vec<ChunkDraft> {
-    let sections = crate::markdown::split_markdown_sections(text);
+    let sections = crate::ingest::markdown::split_markdown_sections(text);
     if sections.is_empty() {
         return Vec::new();
     }

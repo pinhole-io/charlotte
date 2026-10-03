@@ -262,7 +262,7 @@ fn parse_document_bytes_with_content_type(
         DocumentFormat::Html => {
             let html = std::str::from_utf8(bytes)
                 .map_err(|e| CharlotteError::msg(format!("HTML is not valid UTF-8: {e}")))?;
-            crate::markdown::html_to_markdown_limited(html, max_markdown_chars.max(1))?.0
+            crate::ingest::markdown::html_to_markdown_limited(html, max_markdown_chars.max(1))?.0
         }
         DocumentFormat::Docx => docx_markdown(bytes)?,
         DocumentFormat::Spreadsheet => spreadsheet_markdown(bytes)?,

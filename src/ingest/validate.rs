@@ -2,7 +2,7 @@
 
 use regex::RegexSet;
 
-use crate::chunk::ChunkDraft;
+use crate::ingest::chunk::ChunkDraft;
 
 /// Rules applied to each chunk after chunking and before deduplication.
 #[derive(Debug, Clone)]

@@ -1,5 +1,13 @@
 //! Shared browser handle for Charlotte tools and crawlers.
 
+pub mod backend;
+pub(crate) mod blockdetect;
+pub(crate) mod blocklist;
+pub mod obscura;
+pub mod playwright;
+pub mod pool;
+pub(crate) mod url_policy;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,13 +17,9 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
+use crate::browser::url_policy::UrlPolicy;
 use crate::error::CharlotteError;
-use crate::markdown::{AGENT_DEFAULT_MAX_HTML_BYTES, AGENT_DEFAULT_MAX_MARKDOWN_CHARS};
-use crate::url_policy::UrlPolicy;
-
-pub mod backend;
-pub mod obscura;
-pub mod playwright;
+use crate::ingest::markdown::{AGENT_DEFAULT_MAX_HTML_BYTES, AGENT_DEFAULT_MAX_MARKDOWN_CHARS};
 
 pub use backend::{BrowserBackend, BrowserBackendKind};
 pub use obscura::ObscuraCdpBackend;
@@ -155,8 +159,8 @@ impl BrowserHandle {
     /// Build a browser handle from env-selected backend settings.
     #[instrument(skip_all)]
     pub async fn from_config(config: BrowserConfig) -> Result<Self, CharlotteError> {
-        let backend_kind = crate::http_config::browser_backend_kind_from_env()?;
-        let endpoint = crate::http_config::cdp_endpoint_from_env();
+        let backend_kind = crate::config::browser_backend_kind_from_env()?;
+        let endpoint = crate::config::cdp_endpoint_from_env();
         match backend_kind {
             BrowserBackendKind::Playwright => {
                 if endpoint.is_some() {

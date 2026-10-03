@@ -32,10 +32,10 @@ use std::time::Duration;
 
 use superglue::http::{ClientConfig, HttpClient};
 
+use crate::browser::url_policy::UrlPolicy;
 use crate::browser::{BrowserBackendKind, BrowserConfig};
 use crate::error::CharlotteError;
 use crate::search::{DEFAULT_SEARXNG_URL, SearchBackendKind, SearchConfig};
-use crate::url_policy::UrlPolicy;
 
 pub const DEFAULT_CDP_ENDPOINT: &str = "http://127.0.0.1:9222";
 

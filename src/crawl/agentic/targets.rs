@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::url_policy::UrlPolicy;
+use crate::browser::url_policy::UrlPolicy;
 
 /// Interactive element returned by the sidecar `observe` / `get_links` command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

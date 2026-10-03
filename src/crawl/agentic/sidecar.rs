@@ -12,7 +12,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use super::targets::ObservePage;
 use crate::CharlotteError;
-use crate::http_config::cdp_endpoint_from_env;
+use crate::config::cdp_endpoint_from_env;
 
 const DEFAULT_CDP: &str = "http://127.0.0.1:9222";
 const ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(45);

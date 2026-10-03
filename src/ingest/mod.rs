@@ -6,18 +6,25 @@
 //! ## Pipeline
 //!
 //! 1. Resolve input to one or more [`SourcePage`] records (body text).
-//! 2. Chunk each page with [`ChunkerConfig`](crate::chunk::ChunkerConfig).
-//! 3. [`ValidationPipeline`](crate::validate::ValidationPipeline) per page.
-//! 4. [`deduplicate_with_meta`](crate::dedup::deduplicate_with_meta) across the flattened stream.
+//! 2. Chunk each page with [`ChunkerConfig`](crate::ingest::chunk::ChunkerConfig).
+//! 3. [`ValidationPipeline`](crate::ingest::validate::ValidationPipeline) per page.
+//! 4. [`deduplicate_with_meta`](crate::ingest::dedup::deduplicate_with_meta) across the flattened stream.
+
+pub(crate) mod chunk;
+pub(crate) mod dedup;
+pub(crate) mod extract;
+pub(crate) mod markdown;
+pub(crate) mod parse_document;
+pub(crate) mod validate;
 
 use std::sync::Arc;
 
 use crate::browser::{BrowserHandle, NavigateOptions};
-use crate::chunk::ChunkerConfig;
-use crate::chunk::{ChunkDraft, Chunker};
-use crate::dedup::{DedupConfig, deduplicate_with_meta};
 use crate::error::CharlotteError;
-use crate::validate::{ValidatedChunk, ValidationPipeline, ValidatorConfig};
+use crate::ingest::chunk::ChunkerConfig;
+use crate::ingest::chunk::{ChunkDraft, Chunker};
+use crate::ingest::dedup::{DedupConfig, deduplicate_with_meta};
+use crate::ingest::validate::{ValidatedChunk, ValidationPipeline, ValidatorConfig};
 
 /// Where text for ingestion comes from.
 #[derive(Debug, Clone)]

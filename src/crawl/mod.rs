@@ -3,6 +3,11 @@
 //! “Undetected” Chromium patches (as in some Python stacks) are not bundled; use
 //! [`crate::browser::AutomationProfile::Stealth`] for best-effort mitigation.
 
+pub mod agentic;
+pub(crate) mod loopguard;
+pub(crate) mod robots;
+pub mod scrape_many;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -14,12 +19,12 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tracing::instrument;
 
+use crate::browser::pool::BrowserPool;
 use crate::browser::{BrowserHandle, NavigateOptions, resolve_href};
-use crate::chunk::Chunker;
+use crate::crawl::robots::RobotsFetcher;
 use crate::error::CharlotteError;
-use crate::markdown::document_html_to_markdown;
-use crate::pool::BrowserPool;
-use crate::robots::RobotsFetcher;
+use crate::ingest::chunk::Chunker;
+use crate::ingest::markdown::document_html_to_markdown;
 
 /// Limits and timing for a [`deep_crawl`].
 #[derive(Clone)]
@@ -358,7 +363,7 @@ pub async fn site_crawl_with_chunks(
     seed_url: &str,
     mut run: CrawlRunConfig,
     hooks: &CrawlHooks,
-    chunker: &crate::chunk::ChunkerConfig,
+    chunker: &crate::ingest::chunk::ChunkerConfig,
     output_limits: &SiteCrawlOutputLimits,
 ) -> Result<Value, CharlotteError> {
     run.include_page_markdown = true;

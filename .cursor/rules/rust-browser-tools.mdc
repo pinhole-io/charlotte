@@ -14,7 +14,7 @@ alwaysApply: false
 ## BrowserConfig defaults
 
 - `block_trackers_and_ads`, `block_fonts`, `performance_launch_args` — document behavior changes in README when toggling.
-- Extend `src/blocklist.rs` for new hosts; keep lists maintainable, not exhaustive.
+- Extend `src/browser/blocklist.rs` for new hosts; keep lists maintainable, not exhaustive.
 
 ## Errors and deps
 

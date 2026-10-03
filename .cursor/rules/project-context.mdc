@@ -24,7 +24,7 @@ Register via `register_charlotte_tools`:
 
 - `UrlPolicy` and private-IP blocking are intentional SSRF guards.
 - Optional robots.txt respect — do not skip for convenience in production paths.
-- Tracker/ad blocking in `blocklist.rs` is **best-effort**, not a security boundary.
+- Tracker/ad blocking in `src/browser/blocklist.rs` is **best-effort**, not a security boundary.
 
 ## Playwright version
 

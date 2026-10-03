@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
-use crate::chunk::ChunkDraft;
+use crate::ingest::chunk::ChunkDraft;
 
 /// Deduplication settings applied after validation.
 #[derive(Debug, Clone)]

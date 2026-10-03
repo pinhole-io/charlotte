@@ -16,10 +16,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::blockdetect::{detect_block_page, detect_block_page_with_url};
+use crate::browser::blockdetect::{detect_block_page, detect_block_page_with_url};
+use crate::browser::blocklist;
 use crate::error::CharlotteError;
-use crate::markdown::body_html_to_markdown;
-use crate::utils::blocklist;
+use crate::ingest::markdown::body_html_to_markdown;
 
 use super::backend::BrowserBackend;
 use super::{AutomationProfile, BrowserConfig, NavigateOptions};
