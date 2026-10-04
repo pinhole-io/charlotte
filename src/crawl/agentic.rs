@@ -9,6 +9,7 @@ mod sidecar;
 mod targets;
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,6 +47,14 @@ const PAGE_RESULT_CLIP: usize = 400;
 
 /// Practical "no limit" for Jev steps and kept pages. The chat model must not lower this.
 pub const AGENTIC_CRAWL_NO_LIMIT: usize = 9_999_999;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ActionStateKey {
+    page_fingerprint: u64,
+    act: &'static str,
+    target_id: Option<String>,
+    input_name: Option<String>,
+}
 
 /// One value the crawl may type into a field.
 ///
@@ -207,6 +216,7 @@ pub async fn agentic_crawl(
     let mut scrolls_on: HashMap<String, u32> = HashMap::new();
     let mut seen_hrefs = target_href_set(&page.targets);
     let mut new_targets_since_scroll = 0u32;
+    let mut attempted_actions = HashSet::new();
 
     let mut kept_pages = Vec::new();
     let mut trace = Vec::new();
@@ -354,6 +364,27 @@ pub async fn agentic_crawl(
             decision.need_extract,
             page.url
         );
+
+        if decision.act != CrawlAct::Stop
+            && !attempted_actions.insert(action_state_key(&page, &decision))
+        {
+            eprintln!(
+                "[crawl:step {step}] repeated action from the same page state; stopping before dispatch"
+            );
+            trace.push(json!({
+                "step": step,
+                "url": page.url,
+                "act": decision.act.as_str(),
+                "section": decision.section_key,
+                "target": decision.target_id,
+                "keep": decision.keep,
+                "need_extract": decision.need_extract,
+                "via_jev": decision.via_jev,
+                "blocked": "repeated_action",
+            }));
+            stopped_reason = "repeated_action".into();
+            break;
+        }
 
         if decision.keep && !already_kept(&kept_pages, &page.url) {
             let mut row = kept_page_row(&page);
@@ -548,6 +579,33 @@ fn count_new_hrefs(seen: &mut HashSet<String>, targets: &[RawTarget]) -> u32 {
         }
     }
     added
+}
+
+fn action_state_key(page: &ObservePage, decision: &jev::StepDecision) -> ActionStateKey {
+    let mut hasher = DefaultHasher::new();
+    canonical_page_url(&page.url).hash(&mut hasher);
+    page.title.hash(&mut hasher);
+    page.markdown.hash(&mut hasher);
+    page.scroll_y.hash(&mut hasher);
+    page.viewport_h.hash(&mut hasher);
+    page.scroll_height.hash(&mut hasher);
+    page.at_page_top().hash(&mut hasher);
+    page.at_page_bottom().hash(&mut hasher);
+    for target in &page.targets {
+        target.id.hash(&mut hasher);
+        target.kind.hash(&mut hasher);
+        target.label.hash(&mut hasher);
+        target.href.hash(&mut hasher);
+        target.region.hash(&mut hasher);
+        target.section.hash(&mut hasher);
+        target.in_viewport.hash(&mut hasher);
+    }
+    ActionStateKey {
+        page_fingerprint: hasher.finish(),
+        act: decision.act.as_str(),
+        target_id: decision.target_id.clone(),
+        input_name: decision.input_name.clone(),
+    }
 }
 
 fn push_path(path: &mut Vec<PathHop>, url: String, title: String) {

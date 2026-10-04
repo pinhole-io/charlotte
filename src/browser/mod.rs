@@ -160,10 +160,9 @@ impl BrowserHandle {
     #[instrument(skip_all)]
     pub async fn from_config(config: BrowserConfig) -> Result<Self, CharlotteError> {
         let backend_kind = crate::config::browser_backend_kind_from_env()?;
-        let endpoint = crate::config::cdp_endpoint_from_env();
         match backend_kind {
             BrowserBackendKind::Playwright => {
-                if endpoint.is_some() {
+                if std::env::var_os("CHARLOTTE_CDP_ENDPOINT").is_some() {
                     tracing::warn!(
                         "CHARLOTTE_CDP_ENDPOINT is set but ignored because CHARLOTTE_BROWSER_BACKEND=playwright"
                     );
@@ -173,6 +172,7 @@ impl BrowserHandle {
                 Ok(handle)
             }
             BrowserBackendKind::ObscuraCdp => {
+                let endpoint = crate::config::cdp_endpoint_from_env();
                 let endpoint = endpoint.ok_or_else(|| {
                     CharlotteError::msg(
                         "CHARLOTTE_CDP_ENDPOINT must be set when CHARLOTTE_BROWSER_BACKEND=obscura",

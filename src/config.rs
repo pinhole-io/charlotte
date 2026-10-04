@@ -23,7 +23,7 @@
 //! | `CHARLOTTE_MAX_TEXT_CHARS` | Max visible text from `page_content` (default: 48000). |
 //! | `CHARLOTTE_MAX_MARKDOWN_CHARS` | Default max Markdown from `page_markdown` (default: 32000). |
 //! | `CHARLOTTE_MAX_HTML_BYTES` | Default HTML byte budget before Markdown conversion (default: 600000). |
-//! | `CHARLOTTE_BROWSER_BACKEND` | Browser backend: `obscura` (default), `playwright`, or `cdp` (alias). |
+//! | `CHARLOTTE_BROWSER_BACKEND` | Browser backend: `playwright` (default), `obscura`, or `cdp` (alias). |
 //! | `CHARLOTTE_CDP_ENDPOINT` | CDP endpoint when using Obscura/CDP backend (default: `ws://127.0.0.1:9222/devtools/browser`). |
 
 use std::num::NonZeroU32;
@@ -178,14 +178,14 @@ pub fn search_config_from_env() -> Result<SearchConfig, CharlotteError> {
     ))
 }
 
-/// Parse browser backend from `CHARLOTTE_BROWSER_BACKEND` with default `obscura-cdp`.
+/// Parse browser backend from `CHARLOTTE_BROWSER_BACKEND` with default `playwright`.
 pub fn browser_backend_kind_from_env() -> Result<BrowserBackendKind, CharlotteError> {
     let Ok(raw) = std::env::var("CHARLOTTE_BROWSER_BACKEND") else {
-        return Ok(BrowserBackendKind::ObscuraCdp);
+        return Ok(BrowserBackendKind::Playwright);
     };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Ok(BrowserBackendKind::ObscuraCdp);
+        return Ok(BrowserBackendKind::Playwright);
     }
     BrowserBackendKind::parse(trimmed).ok_or_else(|| {
         CharlotteError::msg(format!(
@@ -221,14 +221,14 @@ mod tests {
     }
 
     #[test]
-    fn browser_backend_defaults_to_obscura() {
+    fn browser_backend_defaults_to_playwright() {
         let _guard = env_lock().lock().expect("env lock");
         // SAFETY: tests in this module guard process env mutation with a global lock.
         unsafe {
             std::env::remove_var("CHARLOTTE_BROWSER_BACKEND");
         }
         let kind = browser_backend_kind_from_env().expect("default backend");
-        assert_eq!(kind, BrowserBackendKind::ObscuraCdp);
+        assert_eq!(kind, BrowserBackendKind::Playwright);
     }
 
     #[test]

@@ -340,6 +340,55 @@ async fn agentic_crawl_jev_scroll_then_stop() {
     assert_eq!(out["stopped_reason"], json!("jev_stop"));
 }
 
+#[tokio::test]
+async fn agentic_crawl_stops_before_repeating_an_action_from_the_same_page_state() {
+    let mock = MockServer::start().await;
+    mount_jev_sequence(
+        &mock,
+        &[
+            ("done", "no"),
+            ("act", "scroll_down"),
+            ("done", "no"),
+            ("act", "scroll_down"),
+            ("done", "no"),
+            ("act", "scroll_down"),
+            ("done", "no"),
+            ("act", "scroll_down"),
+        ],
+    )
+    .await;
+
+    let http = HttpClient::new(ClientConfig::default()).expect("http");
+    let llm = mock_llm(&http, mock.uri());
+    let mut long_page = page(
+        "https://example.com/",
+        "Home",
+        "Docs",
+        "https://example.com/docs",
+    );
+    long_page.scroll_y = 0;
+    long_page.viewport_h = 800;
+    long_page.scroll_height = 4000;
+    long_page.at_top = true;
+    long_page.at_bottom = false;
+    let mut actor = ScriptedPageActor::new(vec![long_page]);
+    let mut cfg = AgenticCrawlConfig::new("https://example.com/", "find the docs");
+    cfg.use_env_jev = false;
+    cfg.max_steps = 4;
+    cfg.max_pages = 4;
+
+    let out = agentic_crawl(&mut actor, &cfg, &http, Some(&llm))
+        .await
+        .expect("crawl");
+    assert_eq!(out["stopped_reason"], json!("repeated_action"));
+    assert_eq!(
+        actor.actions.iter().filter(|a| *a == "scroll:600").count(),
+        1,
+        "the repeated action must not reach the actor: {:?}",
+        actor.actions
+    );
+}
+
 /// On the seed page the trail has no earlier entry, so `back` is not on the menu
 /// and an answer of `back` cannot dispatch. The old code looped on it forever.
 #[tokio::test]

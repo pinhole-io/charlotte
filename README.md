@@ -78,8 +78,8 @@ Select the backend at runtime:
 
 | Value | Behavior |
 |-------|----------|
-| `obscura` / `cdp` | Connect to an existing CDP endpoint (default when `CHARLOTTE_BROWSER_BACKEND` is unset). |
-| `playwright` | Launch Playwright-managed Chromium. |
+| `playwright` | Launch Playwright-managed Chromium (default when `CHARLOTTE_BROWSER_BACKEND` is unset). |
+| `obscura` / `cdp` | Connect to an existing CDP endpoint. |
 
 Environment variables:
 
