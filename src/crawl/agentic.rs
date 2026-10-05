@@ -58,8 +58,8 @@ struct ActionStateKey {
 
 /// One value the crawl may type into a field.
 ///
-/// Jev chooses an input by `name`. The value never enters a prompt, a log, or
-/// the tool result, so a password stays inside the process that types it.
+/// Jev chooses an input by `name`. Hosts must resolve secret values after the
+/// outer model creates the tool call. The value never enters Jev or a tool result.
 pub struct CrawlInput {
     pub name: String,
     value: SecretString,
@@ -107,6 +107,8 @@ pub struct AgenticCrawlConfig {
     /// Single unnamed value. `inputs` covers a form with more than one field.
     pub input_text: Option<String>,
     pub inputs: Vec<CrawlInput>,
+    /// Exact origins allowed while host-resolved credential values are present.
+    pub credential_origins: Option<Vec<String>>,
     pub extract_schema: Option<Value>,
     pub respect_robots: bool,
     pub url_policy: UrlPolicy,
@@ -126,6 +128,7 @@ impl AgenticCrawlConfig {
             same_origin_only: false,
             input_text: None,
             inputs: Vec::new(),
+            credential_origins: None,
             extract_schema: None,
             respect_robots: false,
             url_policy: UrlPolicy::permissive(),
@@ -177,6 +180,11 @@ pub async fn agentic_crawl(
     llm: Option<&AgenticLlm>,
 ) -> Result<Value, CharlotteError> {
     config.url_policy.check_resolved(&config.seed_url).await?;
+    if config.credential_origins.is_some() && !actor.supports_secret_input() {
+        return Err(CharlotteError::msg(
+            "credential input is unsupported by this page actor",
+        ));
+    }
     let robots = if config.respect_robots {
         Some(RobotsFetcher::with_policy(config.url_policy.clone())?)
     } else {
@@ -193,6 +201,11 @@ pub async fn agentic_crawl(
     if page.url.trim().is_empty() {
         page.url = config.seed_url.clone();
     }
+    if !credential_origin_allows(config, &page.url) {
+        let _ = actor.stop().await;
+        return Ok(credential_origin_left_result());
+    }
+    redact_credential_values(config, &mut page);
 
     let creds = typesafe_credentials(llm.map(|l| &l.options), config.use_env_jev);
     let input_names = config.input_names();
@@ -433,6 +446,11 @@ pub async fn agentic_crawl(
         )
         .await?;
         if let Some(mut next) = next {
+            if !credential_origin_allows(config, &next.url) {
+                stopped_reason = "credential_origin_left".into();
+                break;
+            }
+            redact_credential_values(config, &mut next);
             if !next.url.is_empty() && next.url != page.url {
                 visited.insert(next.url.clone());
             }
@@ -681,10 +699,21 @@ async fn dispatch_act(
                 .as_deref()
                 .ok_or_else(|| CharlotteError::msg("type missing target"))?;
             ensure_known_target(targets, id)?;
+            let target = targets
+                .iter()
+                .find(|target| target.id == id)
+                .ok_or_else(|| CharlotteError::msg("type target disappeared"))?;
+            if target.kind != "input" {
+                return Err(CharlotteError::msg("type target is not an input"));
+            }
             let text = config
                 .input_value(decision.input_name.as_deref())
                 .ok_or_else(|| CharlotteError::msg("type has no value to enter"))?;
-            actor.type_text(id, text).await.map(Some)
+            if let Some(origins) = config.credential_origins.as_ref() {
+                actor.type_secret(id, text, origins).await.map(Some)
+            } else {
+                actor.type_text(id, text).await.map(Some)
+            }
         }
     }
 }
@@ -706,6 +735,58 @@ fn target_href<'a>(targets: &'a [RawTarget], id: &str) -> Option<&'a str> {
         .and_then(|t| t.href.as_deref())
 }
 
+fn credential_origin_allows(config: &AgenticCrawlConfig, url: &str) -> bool {
+    let Some(origins) = config.credential_origins.as_ref() else {
+        return true;
+    };
+    !url.trim().is_empty()
+        && origins
+            .iter()
+            .any(|origin| targets::same_origin(origin, url))
+}
+
+fn redact_credential_values(config: &AgenticCrawlConfig, page: &mut ObservePage) {
+    if config.credential_origins.is_none() {
+        return;
+    }
+    let values = config
+        .inputs
+        .iter()
+        .map(CrawlInput::value)
+        .filter(|value| value.chars().count() >= 4)
+        .collect::<Vec<_>>();
+    redact_string(&mut page.url, &values);
+    redact_string(&mut page.title, &values);
+    redact_string(&mut page.markdown, &values);
+    for target in &mut page.targets {
+        redact_string(&mut target.label, &values);
+        redact_string(&mut target.section, &values);
+        if let Some(href) = target.href.as_mut() {
+            redact_string(href, &values);
+        }
+    }
+}
+
+fn redact_string(value: &mut String, secrets: &[&str]) {
+    for secret in secrets {
+        if value.contains(secret) {
+            *value = value.replace(secret, "[REDACTED]");
+        }
+    }
+}
+
+fn credential_origin_left_result() -> Value {
+    json!({
+        "ok": true,
+        "pages": [],
+        "trace": [],
+        "stopped_reason": "credential_origin_left",
+        "via_jev": { "steps": 0, "heuristic_steps": 0, "extracts": 0 },
+        "pages_kept": 0,
+        "visited_count": 0,
+    })
+}
+
 async fn check_nav(
     policy: &UrlPolicy,
     robots: &Option<RobotsFetcher>,
@@ -714,6 +795,9 @@ async fn check_nav(
     url: &str,
 ) -> Result<(), CharlotteError> {
     policy.check_resolved(url).await?;
+    if !credential_origin_allows(config, url) {
+        return Err(CharlotteError::msg("navigation left credential origins"));
+    }
     if config.same_origin_only && !targets::same_origin(page_url, url) {
         return Err(CharlotteError::msg("navigation left page origin"));
     }
@@ -794,6 +878,11 @@ pub async fn agentic_crawl_with_sidecar(
     http: &HttpClient,
     llm: Option<&AgenticLlm>,
 ) -> Result<Value, CharlotteError> {
+    if config.credential_origins.is_some() {
+        return Err(CharlotteError::msg(
+            "credential input is unsupported by the sidecar page actor",
+        ));
+    }
     let mut sidecar = UvSidecar::spawn()?;
     let result = agentic_crawl(&mut sidecar, config, http, llm).await;
     let _ = sidecar.stop().await;
@@ -806,5 +895,163 @@ pub fn agentic_crawl_sidecar_enabled() -> bool {
     match std::env::var("CHARLOTTE_AGENTIC_CRAWL_SIDECAR") {
         Ok(v) => matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "YES"),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::jev::{CrawlAct, StepDecision};
+    use super::*;
+
+    fn input_target(kind: &str) -> RawTarget {
+        RawTarget {
+            id: "t1".to_string(),
+            kind: kind.to_string(),
+            label: "Password".to_string(),
+            href: None,
+            region: "content".to_string(),
+            section: "Sign in".to_string(),
+            in_viewport: true,
+        }
+    }
+
+    fn page(url: &str, kind: &str) -> ObservePage {
+        ObservePage {
+            title: "Sign in".to_string(),
+            url: url.to_string(),
+            markdown: "Sign in".to_string(),
+            targets: vec![input_target(kind)],
+            ..ObservePage::default()
+        }
+    }
+
+    fn credential_config() -> AgenticCrawlConfig {
+        let mut config = AgenticCrawlConfig::new("https://example.com/login", "sign in");
+        config.inputs = vec![CrawlInput::new("password", "marker-password")];
+        config.credential_origins = Some(vec!["https://example.com".to_string()]);
+        config
+    }
+
+    fn type_decision() -> StepDecision {
+        StepDecision {
+            keep: false,
+            act: CrawlAct::Type,
+            target_id: Some("t1".to_string()),
+            section_key: None,
+            input_name: Some("password".to_string()),
+            need_extract: false,
+            via_jev: true,
+        }
+    }
+
+    #[test]
+    fn credential_values_are_removed_from_page_observations() {
+        let config = credential_config();
+        let mut observed = ObservePage {
+            title: "marker-password title".to_string(),
+            url: "https://example.com/?value=marker-password".to_string(),
+            markdown: "reflected marker-password".to_string(),
+            targets: vec![RawTarget {
+                label: "marker-password".to_string(),
+                href: Some("https://example.com/marker-password".to_string()),
+                section: "Account marker-password".to_string(),
+                ..input_target("input")
+            }],
+            ..ObservePage::default()
+        };
+        redact_credential_values(&config, &mut observed);
+        let serialized = serde_json::to_string(&observed).unwrap();
+        assert!(!serialized.contains("marker-password"));
+        assert!(serialized.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
+    async fn credential_navigation_cannot_leave_allowed_origins() {
+        let config = credential_config();
+        assert!(
+            check_nav(
+                &config.url_policy,
+                &None,
+                &config,
+                "https://example.com/login",
+                "https://wrong.example/login",
+            )
+            .await
+            .is_err()
+        );
+        assert!(!config.same_origin_only);
+    }
+
+    #[tokio::test]
+    async fn credential_typing_rechecks_origin_and_target_kind() {
+        let config = credential_config();
+        let targets = vec![input_target("input")];
+        let mut wrong_origin =
+            ScriptedPageActor::new(vec![page("https://wrong.example/login", "input")]);
+        assert!(
+            dispatch_act(
+                &mut wrong_origin,
+                &type_decision(),
+                &config,
+                &targets,
+                &None,
+                "https://example.com/login",
+                None,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            wrong_origin
+                .actions
+                .iter()
+                .all(|action| !action.starts_with("type:"))
+        );
+
+        let button_targets = vec![input_target("button")];
+        let mut safe_origin =
+            ScriptedPageActor::new(vec![page("https://example.com/login", "button")]);
+        assert!(
+            dispatch_act(
+                &mut safe_origin,
+                &type_decision(),
+                &config,
+                &button_targets,
+                &None,
+                "https://example.com/login",
+                None,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            safe_origin
+                .actions
+                .iter()
+                .all(|action| !action.starts_with("type:"))
+        );
+
+        let mut valid = ScriptedPageActor::new(vec![page("https://example.com/login", "input")]);
+        let result = dispatch_act(
+            &mut valid,
+            &type_decision(),
+            &config,
+            &targets,
+            &None,
+            "https://example.com/login",
+            None,
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(valid.actions, vec!["type_secret:t1"]);
+    }
+
+    #[tokio::test]
+    async fn credential_sidecar_run_is_rejected_before_spawn() {
+        let http = HttpClient::new(superglue::http::ClientConfig::default()).unwrap();
+        let error = agentic_crawl_with_sidecar(&credential_config(), &http, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("unsupported"));
     }
 }

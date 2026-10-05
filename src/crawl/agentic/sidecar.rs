@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-use super::targets::ObservePage;
+use super::targets::{ObservePage, same_origin};
 use crate::CharlotteError;
 use crate::config::cdp_endpoint_from_env;
 
@@ -22,6 +22,11 @@ const STDERR_TAIL_MAX: usize = 8_192;
 /// Page actions the crawl controller may send.
 #[async_trait]
 pub trait PageActor: Send {
+    /// Whether this actor supports atomic, origin-checked credential input.
+    fn supports_secret_input(&self) -> bool {
+        false
+    }
+
     async fn start(&mut self) -> Result<(), CharlotteError>;
     async fn navigate(&mut self, url: &str) -> Result<ObservePage, CharlotteError>;
     async fn observe(&mut self) -> Result<ObservePage, CharlotteError>;
@@ -31,6 +36,17 @@ pub trait PageActor: Send {
         target_id: &str,
         text: &str,
     ) -> Result<ObservePage, CharlotteError>;
+    /// Check the active document and type a credential in one actor operation.
+    async fn type_secret(
+        &mut self,
+        _target_id: &str,
+        _text: &str,
+        _allowed_origins: &[String],
+    ) -> Result<ObservePage, CharlotteError> {
+        Err(CharlotteError::msg(
+            "credential input is unsupported by this page actor",
+        ))
+    }
     async fn press(&mut self, key: &str) -> Result<ObservePage, CharlotteError>;
     async fn wait(&mut self, ms: u64) -> Result<ObservePage, CharlotteError>;
     async fn scroll(&mut self, delta: i32) -> Result<ObservePage, CharlotteError>;
@@ -381,6 +397,10 @@ impl ScriptedPageActor {
 
 #[async_trait]
 impl PageActor for ScriptedPageActor {
+    fn supports_secret_input(&self) -> bool {
+        true
+    }
+
     async fn start(&mut self) -> Result<(), CharlotteError> {
         self.actions.push("start".into());
         Ok(())
@@ -398,6 +418,34 @@ impl PageActor for ScriptedPageActor {
 
     async fn click(&mut self, target_id: &str) -> Result<ObservePage, CharlotteError> {
         self.actions.push(format!("click:{target_id}"));
+        self.advance()
+    }
+
+    async fn type_secret(
+        &mut self,
+        target_id: &str,
+        text: &str,
+        allowed_origins: &[String],
+    ) -> Result<ObservePage, CharlotteError> {
+        let _ = text;
+        let current = self.current()?;
+        if !allowed_origins
+            .iter()
+            .any(|origin| same_origin(origin, &current.url))
+        {
+            return Err(CharlotteError::msg(
+                "credential origin changed before typing",
+            ));
+        }
+        let target = current
+            .targets
+            .iter()
+            .find(|target| target.id == target_id)
+            .ok_or_else(|| CharlotteError::msg("type target disappeared"))?;
+        if target.kind != "input" {
+            return Err(CharlotteError::msg("type target is not an input"));
+        }
+        self.actions.push(format!("type_secret:{target_id}"));
         self.advance()
     }
 

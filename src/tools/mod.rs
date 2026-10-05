@@ -24,6 +24,7 @@ use superglue::http::HttpClient;
 use superglue::tools::{Tool, ToolInvokeError, ToolRegistry, ToolRetryPolicy, ToolSpec};
 
 use crate::browser::{BrowserConfig, BrowserHandle};
+use crate::crawl::agentic::CrawlInput;
 use crate::crawl::loopguard::{SharedGuardState, new_guard_state};
 use crate::crawl::scrape_many::LazyBrowserPool;
 use crate::search::SearchConfig;
@@ -120,6 +121,15 @@ pub struct ToolLlmContext {
     pub options: ChatOptions,
 }
 
+/// Secret values resolved by a trusted host after tool approval.
+#[derive(Debug, Clone)]
+pub struct ResolvedCredential {
+    /// Exact HTTPS origins where these values may be typed.
+    pub origins: Vec<String>,
+    /// Named values. The model sees each name, but never its value.
+    pub inputs: Vec<CrawlInput>,
+}
+
 /// Per-call model and cancellation state supplied by a Charlotte host.
 pub trait ToolRuntimeContext: Send + Sync {
     /// Build the current model context. `None` disables optional extraction.
@@ -128,6 +138,23 @@ pub trait ToolRuntimeContext: Send + Sync {
     /// Resolve when the active host turn is cancelled.
     fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(std::future::pending())
+    }
+
+    /// Resolve a host-owned credential alias for the requested seed URL.
+    ///
+    /// Hosts must enforce the alias-to-origin binding before they read a secret.
+    fn resolve_credential<'a>(
+        &'a self,
+        _alias: &'a str,
+        _seed_url: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, ToolInvokeError>> + Send + 'a>>
+    {
+        Box::pin(async {
+            Err(ToolInvokeError::handler(
+                "credentials are unavailable",
+                Some("credential_unavailable".to_string()),
+            ))
+        })
     }
 }
 

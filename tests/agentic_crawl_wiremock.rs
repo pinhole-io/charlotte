@@ -619,6 +619,100 @@ async fn agentic_crawl_second_follow_from_a_page_cannot_reuse_the_first_href() {
     );
 }
 
+fn credential_page(url: &str, reflected: Option<&str>, kind: &str) -> ObservePage {
+    let reflected = reflected.unwrap_or("Sign in");
+    ObservePage {
+        title: format!("{reflected} title"),
+        url: url.to_string(),
+        markdown: format!("{reflected} body"),
+        targets: vec![RawTarget {
+            id: "t1".to_string(),
+            kind: kind.to_string(),
+            label: format!("{reflected} field"),
+            section: format!("{reflected} section"),
+            in_viewport: true,
+            ..RawTarget::default()
+        }],
+        ..ObservePage::default()
+    }
+}
+
+#[tokio::test]
+async fn credential_crawl_stops_after_javascript_navigation_leaves_origin() {
+    let mock = MockServer::start().await;
+    mount_jev_sequence(
+        &mock,
+        &[("done", "no"), ("act", "click"), ("target", "t001")],
+    )
+    .await;
+    let http = HttpClient::new(ClientConfig::default()).expect("http");
+    let llm = mock_llm(&http, mock.uri());
+    let mut actor = ScriptedPageActor::new(vec![
+        credential_page("https://example.com/login", None, "button"),
+        credential_page("https://wrong.example/collect", None, "input"),
+    ]);
+    let mut config = AgenticCrawlConfig::new("https://example.com/login", "sign in");
+    config.use_env_jev = false;
+    config.max_steps = 3;
+    config.inputs = vec![charlotte::CrawlInput::new("password", "marker-password")];
+    config.credential_origins = Some(vec!["https://example.com".to_string()]);
+
+    let output = agentic_crawl(&mut actor, &config, &http, Some(&llm))
+        .await
+        .expect("crawl");
+    assert_eq!(output["stopped_reason"], "credential_origin_left");
+    assert!(!output.to_string().contains("wrong.example"));
+    assert!(
+        actor
+            .actions
+            .iter()
+            .all(|action| !action.starts_with("type_secret:"))
+    );
+}
+
+#[tokio::test]
+async fn credential_crawl_redacts_reflected_values_before_jev_and_result() {
+    let mock = MockServer::start().await;
+    mount_jev_sequence(
+        &mock,
+        &[("done", "no"), ("act", "type"), ("target", "t001")],
+    )
+    .await;
+    mount_jev_rest(&mock, "done", "yes").await;
+    let http = HttpClient::new(ClientConfig::default()).expect("http");
+    let llm = mock_llm(&http, mock.uri());
+    let mut actor = ScriptedPageActor::new(vec![
+        credential_page("https://example.com/login", None, "input"),
+        credential_page(
+            "https://example.com/account",
+            Some("marker-password"),
+            "input",
+        ),
+    ]);
+    let mut config = AgenticCrawlConfig::new("https://example.com/login", "sign in");
+    config.use_env_jev = false;
+    config.max_steps = 3;
+    config.inputs = vec![charlotte::CrawlInput::new("password", "marker-password")];
+    config.credential_origins = Some(vec!["https://example.com".to_string()]);
+
+    let output = agentic_crawl(&mut actor, &config, &http, Some(&llm))
+        .await
+        .expect("crawl");
+    assert!(!output.to_string().contains("marker-password"));
+    assert!(
+        actor
+            .actions
+            .iter()
+            .any(|action| action == "type_secret:t1")
+    );
+    let requests = mock.received_requests().await.expect("requests");
+    assert!(
+        requests
+            .iter()
+            .all(|request| !String::from_utf8_lossy(&request.body).contains("marker-password"))
+    );
+}
+
 #[tokio::test]
 async fn agentic_crawl_jev_done_yes_keeps_listing_and_stops() {
     let mock = MockServer::start().await;

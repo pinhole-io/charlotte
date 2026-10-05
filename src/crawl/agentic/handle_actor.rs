@@ -311,6 +311,10 @@ impl HandlePageActor {
 
 #[async_trait]
 impl PageActor for HandlePageActor {
+    fn supports_secret_input(&self) -> bool {
+        true
+    }
+
     async fn start(&mut self) -> Result<(), CharlotteError> {
         Ok(())
     }
@@ -336,6 +340,20 @@ impl PageActor for HandlePageActor {
         let sel = tid_selector(target_id)?;
         self.reveal(target_id).await;
         self.handle.type_text(&sel, text, None).await?;
+        self.settle_observe().await
+    }
+
+    async fn type_secret(
+        &mut self,
+        target_id: &str,
+        text: &str,
+        allowed_origins: &[String],
+    ) -> Result<ObservePage, CharlotteError> {
+        // Keep the origin check, target check, and value assignment in one JS task.
+        let selector = tid_selector(target_id)?;
+        self.handle
+            .type_secret(&selector, text, allowed_origins)
+            .await?;
         self.settle_observe().await
     }
 

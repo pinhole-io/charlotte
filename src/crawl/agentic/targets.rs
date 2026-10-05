@@ -404,8 +404,13 @@ pub fn same_origin(a: &str, b: &str) -> bool {
         return false;
     };
     ua.scheme() == ub.scheme()
-        && ua.host() == ub.host()
+        && canonical_host(&ua) == canonical_host(&ub)
         && ua.port_or_known_default() == ub.port_or_known_default()
+}
+
+fn canonical_host(url: &Url) -> Option<String> {
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
 }
 
 fn resolve_href(base: &str, href: &str) -> String {
@@ -1040,6 +1045,18 @@ mod tests {
         assert!(!same_document(
             "https://en.wikipedia.org/wiki/Wikipedia:About",
             "https://en.wikipedia.org/wiki/Dog"
+        ));
+    }
+
+    #[test]
+    fn same_origin_canonicalizes_case_default_port_and_trailing_dot() {
+        assert!(same_origin(
+            "https://EXAMPLE.com.:443",
+            "https://example.com/login"
+        ));
+        assert!(!same_origin(
+            "https://example.com",
+            "https://example.com:8443"
         ));
     }
 

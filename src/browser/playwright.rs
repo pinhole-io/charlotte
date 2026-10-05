@@ -15,6 +15,7 @@ use playwright_rs::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
+use url::Url;
 
 use crate::browser::blockdetect::{detect_block_page, detect_block_page_with_url};
 use crate::browser::blocklist;
@@ -78,6 +79,25 @@ const ACTIVE_NETWORK_GUARD_INIT_SCRIPT: &str = r#"
   try { Object.defineProperty(window, "RTCPeerConnection", { value: blocked }); } catch (_) {}
   try { Object.defineProperty(window, "webkitRTCPeerConnection", { value: blocked }); } catch (_) {}
 })();
+"#;
+
+const TYPE_SECRET_JS: &str = r#"
+(el, { value, expectedUrl }) => {
+  if (window.location.href !== expectedUrl) return false;
+  const name = el.localName;
+  if (name !== "input" && name !== "textarea") return false;
+  el.scrollIntoView({ block: "center", inline: "nearest" });
+  el.focus();
+  const prototype = name === "textarea"
+    ? HTMLTextAreaElement.prototype
+    : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (!setter) return false;
+  setter.call(el, value);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  return true;
+}
 "#;
 
 struct BrowserSession {
@@ -689,6 +709,53 @@ impl BrowserBackend for PlaywrightBackend {
             loc.press_sequentially(text, Some(opts)).await?;
         } else {
             loc.press_sequentially(text, None).await?;
+        }
+        Ok(json!({
+            "ok": true,
+            "selector": sel,
+            "chars": text.chars().count(),
+        }))
+    }
+
+    async fn type_secret(
+        &self,
+        selector: &str,
+        text: &str,
+        allowed_origins: &[String],
+    ) -> Result<Value, CharlotteError> {
+        let sel = selector.trim();
+        if sel.is_empty() || allowed_origins.is_empty() {
+            return Err(CharlotteError::msg(
+                "credential selector or origin is invalid",
+            ));
+        }
+        let mut guard = self.inner.lock().await;
+        let state = guard.as_mut().ok_or(CharlotteError::Closed)?;
+        let expected_url = state.page.url();
+        let current_url =
+            Url::parse(&expected_url).map_err(|_| CharlotteError::msg("page URL is invalid"))?;
+        if !allowed_origins
+            .iter()
+            .any(|origin| same_canonical_origin(origin, &current_url))
+        {
+            return Err(CharlotteError::msg(
+                "credential origin changed before typing",
+            ));
+        }
+        let locator = state.page.locator(sel).await;
+        let accepted = locator
+            .evaluate::<bool, _>(
+                TYPE_SECRET_JS,
+                Some(json!({
+                    "value": text,
+                    "expectedUrl": expected_url,
+                })),
+            )
+            .await?;
+        if !accepted {
+            return Err(CharlotteError::msg(
+                "credential origin or target changed before typing",
+            ));
         }
         Ok(json!({
             "ok": true,
@@ -1359,15 +1426,31 @@ async fn evaluate_selector_inner_text(page: &Page, sel: &str) -> Result<String, 
 }
 
 fn same_origin(a: &str, b: &str) -> bool {
-    let Ok(ua) = url::Url::parse(a) else {
+    let Ok(ua) = Url::parse(a) else {
         return false;
     };
-    let Ok(ub) = url::Url::parse(b) else {
+    let Ok(ub) = Url::parse(b) else {
         return false;
     };
-    ua.scheme() == ub.scheme()
-        && ua.host() == ub.host()
-        && ua.port_or_known_default() == ub.port_or_known_default()
+    same_origin_urls(&ua, &ub)
+}
+
+fn same_canonical_origin(allowed: &str, current: &Url) -> bool {
+    let Ok(allowed) = Url::parse(allowed) else {
+        return false;
+    };
+    same_origin_urls(&allowed, current)
+}
+
+fn same_origin_urls(a: &Url, b: &Url) -> bool {
+    a.scheme() == b.scheme()
+        && canonical_host(a) == canonical_host(b)
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+fn canonical_host(url: &Url) -> Option<String> {
+    let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
 }
 
 fn redirect_changed(requested_url: &str, final_url: &str) -> bool {
@@ -1584,7 +1667,7 @@ fn json_value_as_usize(v: &Value) -> Option<usize> {
 mod optional_css_selector_tests {
     use super::{
         PlaywrightBackend, cdp_session_matches_active_page, is_denied_cdp_method,
-        optional_css_selector, push_bounded, web_search_cooldown_remaining,
+        optional_css_selector, push_bounded, same_origin, web_search_cooldown_remaining,
     };
     use crate::browser::backend::BrowserBackend;
     use serde_json::json;
@@ -1603,6 +1686,14 @@ mod optional_css_selector_tests {
     fn trims_and_preserves_non_empty() {
         assert_eq!(optional_css_selector(Some("  body  ")), Some("body"));
         assert_eq!(optional_css_selector(Some(".item")), Some(".item"));
+    }
+
+    #[test]
+    fn origin_comparison_normalizes_a_trailing_dot() {
+        assert!(same_origin(
+            "https://EXAMPLE.com.:443/path",
+            "https://example.com/other"
+        ));
     }
 
     #[test]

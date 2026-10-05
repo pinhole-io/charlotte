@@ -20,6 +20,7 @@ const MAX_GOAL_CHARS: usize = 4_000;
 const MAX_INPUTS: usize = 32;
 const MAX_INPUT_NAME_CHARS: usize = 128;
 const MAX_INPUT_CHARS: usize = 16_384;
+const MAX_CREDENTIAL_ALIAS_CHARS: usize = 32;
 const MAX_SCHEMA_BYTES: usize = 64 * 1024;
 const MAX_URL_CHARS: usize = 4_096;
 const AGENTIC_CRAWL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
@@ -44,7 +45,8 @@ pub(crate) fn agentic_crawl_spec(
                 "max_steps": { "type": "integer", "minimum": 1, "maximum": max_steps, "default": DEFAULT_MAX_STEPS.min(max_steps) },
                 "same_origin_only": { "type": "boolean", "description": "If true, only follow same-origin URLs. Default false: Jev may follow any in-page href that UrlPolicy allows.", "default": false },
                 "input_text": { "type": "string", "maxLength": MAX_INPUT_CHARS, "description": "A single value to type when Jev picks type (search box). Use `inputs` for a form with more than one field." },
-                "inputs": { "type": "object", "maxProperties": MAX_INPUTS, "description": "Named values Jev may type, for example {\"email\": \"a@b.com\", \"password\": \"...\"}. Jev picks the field and the name; it never sees the values. Pass credentials here, never in `goal`.", "additionalProperties": { "type": "string", "maxLength": MAX_INPUT_CHARS } },
+                "inputs": { "type": "object", "maxProperties": MAX_INPUTS, "description": "Named non-secret values Jev may type. Jev picks the field and the name. Use credential for passwords or other secrets.", "additionalProperties": { "type": "string", "maxLength": MAX_INPUT_CHARS } },
+                "credential": { "type": "string", "maxLength": MAX_CREDENTIAL_ALIAS_CHARS, "pattern": "^[a-z0-9-]+$", "description": "A host-owned credential profile alias. The host resolves its values after approval; the model never sees them. Do not combine this with input_text or inputs." },
                 "extract_schema": { "type": "object", "description": "Optional JSON schema for chat extract when Jev sets need_extract" },
                 "respect_robots": { "type": "boolean", "default": respect_robots, "description": "Fetch and enforce robots.txt for each origin." }
             },
@@ -86,6 +88,7 @@ impl Tool for AgenticCrawlTool {
         if goal.chars().count() > MAX_GOAL_CHARS {
             return Err(ToolInvokeError::handler("goal is too long", None));
         }
+        let credential = credential_alias(&arguments)?;
         if arguments
             .get("input_text")
             .and_then(Value::as_str)
@@ -164,10 +167,29 @@ impl Tool for AgenticCrawlTool {
             guardrails: Arc::clone(&ctx.guardrails),
             options: ctx.options.clone(),
         });
-        let crawl = tokio::time::timeout(
-            self.timeout.min(AGENTIC_CRAWL_TIMEOUT),
-            agentic_crawl_with_handle(Arc::clone(&self.browser), &cfg, &self.http, llm.as_ref()),
-        );
+        let operation = async {
+            if let Some(alias) = credential.as_deref() {
+                let runtime = self.runtime.as_ref().ok_or_else(|| {
+                    ToolInvokeError::handler(
+                        "credentials are unavailable",
+                        Some("credential_unavailable".to_string()),
+                    )
+                })?;
+                let resolved = runtime.resolve_credential(alias, &cfg.seed_url).await?;
+                if resolved.origins.is_empty() || resolved.inputs.is_empty() {
+                    return Err(ToolInvokeError::handler(
+                        "credentials are unavailable",
+                        Some("credential_unavailable".to_string()),
+                    ));
+                }
+                cfg.inputs = resolved.inputs;
+                cfg.credential_origins = Some(resolved.origins);
+            }
+            agentic_crawl_with_handle(Arc::clone(&self.browser), &cfg, &self.http, llm.as_ref())
+                .await
+                .map_err(tool_error)
+        };
+        let crawl = tokio::time::timeout(self.timeout.min(AGENTIC_CRAWL_TIMEOUT), operation);
         let result = if let Some(runtime) = &self.runtime {
             tokio::select! {
                 biased;
@@ -182,10 +204,71 @@ impl Tool for AgenticCrawlTool {
         } else {
             crawl.await
         };
-        result
-            .map_err(|_| {
-                ToolInvokeError::handler("agentic crawl timed out", Some("timeout".to_string()))
-            })?
-            .map_err(tool_error)
+        match result {
+            Ok(result) => result,
+            Err(_) => Err(ToolInvokeError::handler(
+                "agentic crawl timed out",
+                Some("timeout".to_string()),
+            )),
+        }
+    }
+}
+
+fn credential_alias(arguments: &Value) -> Result<Option<String>, ToolInvokeError> {
+    let alias = match arguments.get("credential") {
+        None => Ok(None),
+        Some(Value::String(alias))
+            if !alias.is_empty()
+                && alias.len() <= MAX_CREDENTIAL_ALIAS_CHARS
+                && alias.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                }) =>
+        {
+            Ok(Some(alias.clone()))
+        }
+        Some(_) => Err(ToolInvokeError::handler(
+            "credential alias is invalid",
+            None,
+        )),
+    }?;
+    if alias.is_some()
+        && (arguments.get("input_text").is_some() || arguments.get("inputs").is_some())
+    {
+        return Err(ToolInvokeError::handler(
+            "credential cannot be combined with plaintext inputs",
+            None,
+        ));
+    }
+    Ok(alias)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_alias_is_bounded_and_cannot_mix_with_plaintext() {
+        assert_eq!(
+            credential_alias(&json!({"credential": "example-login"}))
+                .unwrap()
+                .as_deref(),
+            Some("example-login")
+        );
+        assert!(credential_alias(&json!({"credential": "Example"})).is_err());
+
+        let arguments = json!({
+            "credential": "example-login",
+            "inputs": {"password": "marker-password"}
+        });
+        assert!(credential_alias(&arguments).is_err());
+    }
+
+    #[test]
+    fn schema_exposes_reference_only_credential_field() {
+        let spec = agentic_crawl_spec(5, 5, true);
+        let credential = &spec.parameters_schema["properties"]["credential"];
+        assert_eq!(credential["pattern"], "^[a-z0-9-]+$");
+        let schema = spec.parameters_schema.to_string();
+        assert!(!schema.contains("marker-password"));
     }
 }

@@ -1,6 +1,8 @@
 //! Integration test: real Chromium via Playwright. Ignored so `cargo test` does not require browsers.
 
-use charlotte::BrowserHandle;
+use charlotte::{BrowserBackendKind, BrowserConfig, BrowserHandle, BrowserHost, BrowserHostConfig};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 #[ignore = "requires Playwright browsers (see charlotte README)"]
@@ -50,4 +52,49 @@ async fn navigate_and_read_example_com() {
     );
 
     browser.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "requires Playwright browsers (see charlotte README)"]
+async fn typed_credential_stays_in_one_hosted_context() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<html><body><input id="password" type="password"></body></html>"#,
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    let host = BrowserHost::start(BrowserHostConfig {
+        backend: BrowserBackendKind::Playwright,
+        browser: BrowserConfig::default(),
+        cdp_endpoint: None,
+    })
+    .await
+    .expect("browser host");
+    let first = host.open_session().await.expect("first context");
+    let second = host.open_session().await.expect("second context");
+    let url = format!("{}/login", server.uri());
+    first.navigate(&url).await.expect("first navigate");
+    second.navigate(&url).await.expect("second navigate");
+
+    first
+        .fill("#password", "marker-password")
+        .await
+        .expect("type credential");
+    let first_value = first
+        .evaluate_js("() => document.querySelector('#password').value", None)
+        .await
+        .expect("first value");
+    let second_value = second
+        .evaluate_js("() => document.querySelector('#password').value", None)
+        .await
+        .expect("second value");
+    assert_eq!(first_value["value"], "marker-password");
+    assert_eq!(second_value["value"], "");
+
+    first.close().await.expect("close first");
+    second.close().await.expect("close second");
+    host.close().await.expect("close host");
 }

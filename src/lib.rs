@@ -89,8 +89,8 @@ pub use scratchpad::{
 pub use search::{SearchBackendKind, SearchConfig, web_search};
 pub use tools::{
     CharlotteTool, CharlotteToolLimits, CharlotteToolProfile, CharlotteToolSet,
-    RegisteredCharlotteTool, ToolLlmContext, ToolRuntimeContext, charlotte_tool_names,
-    charlotte_tool_specs, register_charlotte_tools,
+    RegisteredCharlotteTool, ResolvedCredential, ToolLlmContext, ToolRuntimeContext,
+    charlotte_tool_names, charlotte_tool_specs, register_charlotte_tools,
 };
 #[cfg(feature = "qdrant")]
 pub use utils::qdrant::register_charlotte_qdrant_tools;

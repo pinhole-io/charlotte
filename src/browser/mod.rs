@@ -408,6 +408,18 @@ impl BrowserHandle {
         backend.type_text(selector, text, delay_ms).await
     }
 
+    #[instrument(skip(self, text, allowed_origins))]
+    pub(crate) async fn type_secret(
+        &self,
+        selector: &str,
+        text: &str,
+        allowed_origins: &[String],
+    ) -> Result<Value, CharlotteError> {
+        let guard = self.inner.lock().await;
+        let backend = guard.as_ref().ok_or(CharlotteError::Closed)?;
+        backend.type_secret(selector, text, allowed_origins).await
+    }
+
     #[instrument(skip(self, text))]
     pub async fn fill(&self, selector: &str, text: &str) -> Result<Value, CharlotteError> {
         let guard = self.inner.lock().await;

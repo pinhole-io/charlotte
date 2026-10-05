@@ -138,6 +138,28 @@ When the Harn TUI selects another conversation, Harn closes the previous context
 
 Call `CharlotteToolSet::close` for each runtime. Close `BrowserHost` after all runtime sessions close.
 
+### Host-resolved credentials
+
+`agentic_crawl` accepts an optional `credential` alias. The outer model sees
+the alias, but it does not see the values.
+
+A host enables this path by implementing
+`ToolRuntimeContext::resolve_credential`. The resolver returns named
+`CrawlInput` values and their exact allowed HTTPS origins.
+
+Charlotte applies these rules to a credential run:
+
+- The resolver runs inside the crawl timeout and cancellation boundary.
+- `credential` cannot be combined with `input_text` or `inputs`.
+- Every navigation and landed page must match an allowed origin.
+- Charlotte checks the current origin again before it types a value.
+- Charlotte types a credential only into an observed input target.
+- Charlotte removes reflected values from page observations and tool results.
+- The sidecar actor rejects credential runs.
+
+The host must check the requested origin before it reads a secret. Charlotte
+does not provide a vault and does not depend on one.
+
 ## Cargo examples
 
 | Example | Notes |

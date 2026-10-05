@@ -69,6 +69,12 @@ pub trait BrowserBackend: Send + Sync {
         text: &str,
         delay_ms: Option<f64>,
     ) -> Result<Value, CharlotteError>;
+    async fn type_secret(
+        &self,
+        selector: &str,
+        text: &str,
+        allowed_origins: &[String],
+    ) -> Result<Value, CharlotteError>;
     async fn fill(&self, selector: &str, text: &str) -> Result<Value, CharlotteError>;
     async fn press_key(&self, key: &str) -> Result<Value, CharlotteError>;
     async fn select_option(
