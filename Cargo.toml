@@ -11,10 +11,10 @@ rust-version = "1.88"
 anyhow = "1.0.103"
 async-trait = "0.1"
 base64 = "0.22"
-clap = { version = "4.6.2", features = ["derive", "env"] }
+clap = { version = "4.6.2", features = ["derive", "env"], optional = true }
 htmd = "0.5"
 playwright-rs = "0.10"
-qdrant-client = "1"
+qdrant-client = { version = "1", optional = true }
 regex = "1"
 scraper = "0.23"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
@@ -22,23 +22,44 @@ secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 superglue = { path = "../superglue" }
-notepad = { path = "../notepad", default-features = false, features = ["superglue"] }
+notepad = { path = "../notepad", default-features = false, features = ["superglue"], optional = true }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
 tracing = "0.1"
 url = "2"
 urlencoding = "2"
-pdf-extract = "0.12.0"
-calamine = "0.36.1"
-docx-rs = "0.4.22"
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+pdf-extract = { version = "0.12.0", optional = true }
+calamine = { version = "0.36.1", optional = true }
+docx-rs = { version = "0.4.22", optional = true }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-util"] }
 wiremock = "0.6"
 
 [features]
-default = []
-synthesize = ["notepad/synthesize"]
+default = ["full"]
+full = ["cli", "documents", "notepad", "qdrant"]
+harn = []
+cli = ["dep:clap"]
+documents = ["dep:calamine", "dep:docx-rs", "dep:pdf-extract", "dep:zip"]
+notepad = ["dep:notepad"]
+qdrant = ["dep:qdrant-client"]
+synthesize = ["notepad", "notepad/synthesize"]
+
+[[bin]]
+name = "charlotte"
+path = "src/main.rs"
+required-features = ["full"]
+
+[[example]]
+name = "charlotte_research"
+path = "examples/charlotte_research.rs"
+required-features = ["full"]
+
+[[example]]
+name = "babe_chat"
+path = "examples/babe_chat.rs"
+required-features = ["full"]
 

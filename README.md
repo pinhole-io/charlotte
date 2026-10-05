@@ -4,9 +4,11 @@ Charlotte is a Rust SDK for a web-research agent.
 
 It builds on [superglue](https://github.com/Bioto/superglue), [notepad](https://github.com/Bioto/notepad), and [playwright-rs](https://crates.io/crates/playwright-rs).
 
-## Hard dependency
+## Dependencies
 
-Superglue is a required dependency. This crate does not build without it. Notepad is also required, and Charlotte enables notepad's `superglue` feature.
+SuperGlue is required. Notepad, Qdrant, the CLI, and document parsers are optional.
+
+The default `full` feature keeps the standalone package behavior. Harn uses the focused `harn` feature without these optional components.
 
 ## Sibling checkout layout
 
@@ -65,7 +67,8 @@ cargo run --example charlotte_research -- --interactive --headed
 ## What you get
 
 - `charlotte_agent_spec` — a superglue `AgentSpec` for browser-backed research.
-- `BrowserHandle` — one shared browser page, mutex-serialized for tool use.
+- `BrowserHandle` — one isolated browser context, mutex-serialized for tool use.
+- `BrowserHost` — one server-owned browser process that creates isolated runtime sessions.
 - Tools via `register_charlotte_tools`: navigate, search, page read, crawl, extract, and more.
 - Optional `expand_user_request_to_research_brief` — turns a short user message into a research brief before tools run.
 - Session notepad tools for large tool-output offload during a run.
@@ -107,10 +110,33 @@ Navigation and page tools always use the browser backend. Run a SearXNG instance
 
 `UrlPolicy` and `BrowserConfig::url_policy` can restrict which hosts load:
 
-- Set `CHARLOTTE_ALLOW_HOST_SUFFIXES` to a comma-separated allow-list of host suffixes. A non-empty list enforces the allow-list.
-- Set `CHARLOTTE_BLOCK_PRIVATE_IPS=1` to reject loopback, private, and link-local IP literals in URLs. Metadata-style hostnames are also blocked when this flag is on.
+- Every policy accepts only HTTP and HTTPS URLs without user information.
+- Set `CHARLOTTE_ALLOW_HOST_SUFFIXES` to a comma-separated allow-list of host suffixes.
+- Set `CHARLOTTE_BLOCK_PRIVATE_IPS=1` to reject non-public IP literals and DNS results.
+- The browser applies the policy to navigation, redirects, subresources, and isolated contexts.
 
 Build a `UrlPolicy` in code, or call `apply_browser_config_from_env`. Combine this with network policy for multi-tenant deployments. Do not disable these guards for convenience in production paths.
+
+## Harn integration
+
+Build Harn with Charlotte's focused feature:
+
+```bash
+cargo check --no-default-features --features harn
+```
+
+The host API exposes exact schemas through `charlotte_tool_specs`. Hosts can inspect bounded schemas before they create browser resources.
+
+Harn initially exposes only `enable_headed_browser`. Approval opens one headed context and reveals `web_search` plus `agentic_crawl`.
+
+One `BrowserHost` owns the Playwright driver and browser process. Harn creates no page or conversation context before activation.
+
+Each activated primary runtime gets separate cookies, storage, tabs, page state, and crawl guard state. Child runtimes cannot activate Charlotte.
+
+Activation stays in memory. A restart, fork, or new conversation starts with Charlotte disabled.
+When the Harn TUI selects another conversation, Harn closes the previous context and resets that runtime to disabled.
+
+Call `CharlotteToolSet::close` for each runtime. Close `BrowserHost` after all runtime sessions close.
 
 ## Cargo examples
 
@@ -124,6 +150,7 @@ Build a `UrlPolicy` in code, or call `apply_browser_config_from_env`. Combine th
 
 ```bash
 cargo test
+cargo test --no-default-features --features harn
 ```
 
 - Unit tests cover chunking, crawl, URL policy, robots parsing, and related helpers.

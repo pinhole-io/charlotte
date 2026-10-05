@@ -14,17 +14,32 @@ Register via `register_charlotte_tools`:
 - `navigate`, `web_search`, `page_content`, `page_markdown`, `list_links`, `scroll`, `site_crawl_chunks`, `agentic_crawl`, and others — see tool schemas for parameters and behavior
 - `page_markdown`: MarkItDown-style body→Markdown; optional `focus` ranks relevant sections
 - Optional brief expansion: `expand_user_request_to_research_brief` (LLM, no tools) — reflects user query; injects runtime **Search stack** operational rules (backend, site: limits, cooldown) into Method, not extra task constraints
+- `charlotte_tool_specs` returns exact bounded schemas before a host creates browser resources.
+- Harn initially exposes only `enable_headed_browser`.
+- Approved activation opens one headed context and reveals `web_search` plus `agentic_crawl`.
 
 ## Browser concurrency
 
-- One shared Chromium page per `BrowserHandle`.
-- All page access is **mutex-serialized** — do not bypass the handle for “quick” tool calls.
+- `BrowserHost` owns one browser process.
+- Each hosted `BrowserHandle` owns an isolated context and page.
+- All page access in one handle is **mutex-serialized**.
+- Harn opens no context or page before activation.
+- Harn activation is memory-only. New conversations, forks, restarts, and child runtimes start disabled.
+- Harn closes the previous context and resets its runtime to disabled when the TUI selects another conversation.
 
 ## Safety (do not weaken)
 
 - `UrlPolicy` and private-IP blocking are intentional SSRF guards.
 - Optional robots.txt respect — do not skip for convenience in production paths.
 - Tracker/ad blocking in `src/browser/blocklist.rs` is **best-effort**, not a security boundary.
+- Harn always blocks private addresses and URL user information.
+- Harn requires an exact unattended rule for `browser://headed`.
+- Harn does not let `skip_approvals` bypass Charlotte tools.
+
+## Features
+
+- `full` enables the CLI, document parsers, Notepad, and Qdrant.
+- `harn` keeps only the focused browser and search surface.
 
 ## Playwright version
 

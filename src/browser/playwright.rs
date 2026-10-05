@@ -22,7 +22,7 @@ use crate::error::CharlotteError;
 use crate::ingest::markdown::body_html_to_markdown;
 
 use super::backend::BrowserBackend;
-use super::{AutomationProfile, BrowserConfig, NavigateOptions};
+use super::{AutomationProfile, BrowserBackendKind, BrowserConfig, NavigateOptions};
 
 /// Minimal init script applied in [`AutomationProfile::Stealth`] mode (runs before page scripts).
 const STEALTH_INIT_SCRIPT: &str = r#"
@@ -71,9 +71,17 @@ const CONSOLE_CAPTURE_INIT_SCRIPT: &str = r#"
 })();
 "#;
 
+const ACTIVE_NETWORK_GUARD_INIT_SCRIPT: &str = r#"
+(() => {
+  const blocked = () => { throw new Error("active network API blocked by URL policy"); };
+  try { Object.defineProperty(window, "WebSocket", { value: blocked }); } catch (_) {}
+  try { Object.defineProperty(window, "RTCPeerConnection", { value: blocked }); } catch (_) {}
+  try { Object.defineProperty(window, "webkitRTCPeerConnection", { value: blocked }); } catch (_) {}
+})();
+"#;
+
 struct BrowserSession {
-    playwright: Playwright,
-    browser: Browser,
+    owner: Option<BrowserOwner>,
     #[allow(dead_code)]
     context: BrowserContext,
     page: Page,
@@ -84,9 +92,111 @@ struct BrowserSession {
     last_web_search_at: Option<Instant>,
 }
 
+enum BrowserOwner {
+    Launched {
+        playwright: Playwright,
+        browser: Browser,
+    },
+    Cdp {
+        playwright: Playwright,
+    },
+}
+
 pub(crate) struct PlaywrightBackend {
     inner: Mutex<Option<BrowserSession>>,
     backend_id: &'static str,
+}
+
+struct SharedBrowserHost {
+    playwright: Playwright,
+    browser: Browser,
+    launched: bool,
+}
+
+pub(crate) struct PlaywrightBrowserHost {
+    inner: Mutex<Option<SharedBrowserHost>>,
+    config: BrowserConfig,
+    backend_id: &'static str,
+}
+
+impl PlaywrightBrowserHost {
+    pub(crate) async fn start(
+        backend: BrowserBackendKind,
+        config: BrowserConfig,
+        cdp_endpoint: Option<&str>,
+    ) -> Result<Self, CharlotteError> {
+        let playwright = Playwright::launch().await?;
+        let (browser, launched, backend_id) = match backend {
+            BrowserBackendKind::Playwright => {
+                let mut launch = LaunchOptions::new().headless(config.headless);
+                if let Some(path) = &config.executable_path {
+                    launch = launch.executable_path(path.clone());
+                }
+                if let Some(channel) = &config.channel {
+                    launch = launch.channel(channel.clone());
+                }
+                let args = chromium_launch_args(&config);
+                if !args.is_empty() {
+                    launch = launch.args(args);
+                }
+                (
+                    playwright.chromium().launch_with_options(launch).await?,
+                    true,
+                    "playwright",
+                )
+            }
+            BrowserBackendKind::ObscuraCdp => {
+                let endpoint = cdp_endpoint.ok_or_else(|| {
+                    CharlotteError::msg("CDP endpoint is required for the CDP browser backend")
+                })?;
+                let (browser, _) = connect_browser_over_cdp(&playwright, endpoint).await?;
+                (browser, false, "obscura-cdp")
+            }
+        };
+        Ok(Self {
+            inner: Mutex::new(Some(SharedBrowserHost {
+                playwright,
+                browser,
+                launched,
+            })),
+            config,
+            backend_id,
+        })
+    }
+
+    pub(crate) async fn open_backend(&self) -> Result<Arc<dyn BrowserBackend>, CharlotteError> {
+        let browser = {
+            let guard = self.inner.lock().await;
+            guard
+                .as_ref()
+                .ok_or(CharlotteError::Closed)?
+                .browser
+                .clone()
+        };
+        let backend =
+            PlaywrightBackend::attach_shared(browser, self.config.clone(), self.backend_id).await?;
+        Ok(Arc::new(backend))
+    }
+
+    pub(crate) async fn close(&self) -> Result<(), CharlotteError> {
+        let host = self.inner.lock().await.take();
+        let Some(host) = host else {
+            return Ok(());
+        };
+        let browser_result = if host.launched {
+            host.browser.close().await.map_err(CharlotteError::from)
+        } else {
+            Ok(())
+        };
+        let driver_result = host
+            .playwright
+            .shutdown()
+            .await
+            .map_err(CharlotteError::from);
+        browser_result?;
+        driver_result?;
+        Ok(())
+    }
 }
 
 impl PlaywrightBackend {
@@ -120,71 +230,16 @@ impl PlaywrightBackend {
         config: BrowserConfig,
         endpoint_url: &str,
     ) -> Result<Self, CharlotteError> {
-        let browser_type = playwright.chromium();
-        let options = ConnectOverCdpOptions::new();
-        let mut params = serde_json::Map::new();
-        params.insert("endpointURL".into(), json!(endpoint_url));
-        params.insert(
-            "timeout".into(),
-            json!(options.timeout.unwrap_or(playwright_rs::DEFAULT_TIMEOUT_MS)),
-        );
-        if let Some(slow_mo) = options.slow_mo {
-            params.insert("slowMo".into(), json!(slow_mo));
-        }
-        if let Some(headers) = options.headers {
-            let entries: Vec<Value> = headers
-                .into_iter()
-                .map(|(name, value)| json!({ "name": name, "value": value }))
-                .collect();
-            params.insert("headers".into(), Value::Array(entries));
-        }
-        let params = Value::Object(params);
+        let (browser, _) = connect_browser_over_cdp(&playwright, endpoint_url).await?;
+        let context = create_isolated_context(&browser, &config).await?;
+        configure_context(&context, &config).await?;
 
-        #[derive(Deserialize)]
-        struct GuidRef {
-            #[serde(deserialize_with = "deserialize_arc_str")]
-            guid: Arc<str>,
-        }
-
-        #[derive(Deserialize)]
-        struct ConnectOverCdpResponse {
-            browser: GuidRef,
-            #[serde(rename = "defaultContext")]
-            default_context: Option<GuidRef>,
-        }
-
-        let response: ConnectOverCdpResponse = browser_type
-            .channel()
-            .send("connectOverCDP", params)
-            .await?;
-        let browser: Browser = browser_type
-            .connection()
-            .get_typed(&response.browser.guid)
-            .await?;
-
-        let context: BrowserContext = if let Some(ctx_ref) = response.default_context {
-            browser_type.connection().get_typed(&ctx_ref.guid).await?
-        } else {
-            browser.new_context().await?
-        };
-
-        if matches!(config.automation_profile, AutomationProfile::Stealth) {
-            context.add_init_script(STEALTH_INIT_SCRIPT).await?;
-        }
-        context.add_init_script(CONSOLE_CAPTURE_INIT_SCRIPT).await?;
-        install_network_policy(&context, config.block_trackers_and_ads, config.block_fonts).await?;
-
-        let page = if let Some(existing) = context.pages().into_iter().next() {
-            existing
-        } else {
-            context.new_page().await?
-        };
+        let page = context.new_page().await?;
 
         let network_events = Arc::new(Mutex::new(VecDeque::new()));
         install_network_observers(&page, Arc::clone(&network_events)).await?;
         let session = BrowserSession {
-            playwright,
-            browser,
+            owner: Some(BrowserOwner::Cdp { playwright }),
             context,
             page,
             cdp_session: None,
@@ -205,38 +260,42 @@ impl PlaywrightBackend {
         config: BrowserConfig,
         backend_id: &'static str,
     ) -> Result<Self, CharlotteError> {
-        let context = if config.viewport.is_some()
-            || config.user_agent.is_some()
-            || config.storage_state_path.is_some()
-        {
-            let mut b = BrowserContextOptions::builder();
-            if let Some((w, h)) = config.viewport {
-                b = b.viewport(Viewport {
-                    width: w,
-                    height: h,
-                });
-            }
-            if let Some(ref ua) = config.user_agent {
-                b = b.user_agent(ua.clone());
-            }
-            if let Some(ref p) = config.storage_state_path {
-                b = b.storage_state_path(p.display().to_string());
-            }
-            browser.new_context_with_options(b.build()).await?
-        } else {
-            browser.new_context().await?
-        };
-        if matches!(config.automation_profile, AutomationProfile::Stealth) {
-            context.add_init_script(STEALTH_INIT_SCRIPT).await?;
-        }
-        context.add_init_script(CONSOLE_CAPTURE_INIT_SCRIPT).await?;
-        install_network_policy(&context, config.block_trackers_and_ads, config.block_fonts).await?;
+        let context = create_isolated_context(&browser, &config).await?;
+        configure_context(&context, &config).await?;
         let page = context.new_page().await?;
         let network_events = Arc::new(Mutex::new(VecDeque::new()));
         install_network_observers(&page, Arc::clone(&network_events)).await?;
         let session = BrowserSession {
-            playwright,
-            browser,
+            owner: Some(BrowserOwner::Launched {
+                playwright,
+                browser,
+            }),
+            context,
+            page,
+            cdp_session: None,
+            cdp_session_page_url: None,
+            network_events,
+            config,
+            last_web_search_at: None,
+        };
+        Ok(Self {
+            inner: Mutex::new(Some(session)),
+            backend_id,
+        })
+    }
+
+    pub(crate) async fn attach_shared(
+        browser: Browser,
+        config: BrowserConfig,
+        backend_id: &'static str,
+    ) -> Result<Self, CharlotteError> {
+        let context = create_isolated_context(&browser, &config).await?;
+        configure_context(&context, &config).await?;
+        let page = context.new_page().await?;
+        let network_events = Arc::new(Mutex::new(VecDeque::new()));
+        install_network_observers(&page, Arc::clone(&network_events)).await?;
+        let session = BrowserSession {
+            owner: None,
             context,
             page,
             cdp_session: None,
@@ -252,6 +311,97 @@ impl PlaywrightBackend {
     }
 }
 
+async fn connect_browser_over_cdp(
+    playwright: &Playwright,
+    endpoint_url: &str,
+) -> Result<(Browser, Option<BrowserContext>), CharlotteError> {
+    let browser_type = playwright.chromium();
+    let options = ConnectOverCdpOptions::new();
+    let mut params = serde_json::Map::new();
+    params.insert("endpointURL".into(), json!(endpoint_url));
+    params.insert(
+        "timeout".into(),
+        json!(options.timeout.unwrap_or(playwright_rs::DEFAULT_TIMEOUT_MS)),
+    );
+    if let Some(slow_mo) = options.slow_mo {
+        params.insert("slowMo".into(), json!(slow_mo));
+    }
+    if let Some(headers) = options.headers {
+        let entries: Vec<Value> = headers
+            .into_iter()
+            .map(|(name, value)| json!({ "name": name, "value": value }))
+            .collect();
+        params.insert("headers".into(), Value::Array(entries));
+    }
+
+    #[derive(Deserialize)]
+    struct GuidRef {
+        #[serde(deserialize_with = "deserialize_arc_str")]
+        guid: Arc<str>,
+    }
+
+    #[derive(Deserialize)]
+    struct ConnectOverCdpResponse {
+        browser: GuidRef,
+        #[serde(rename = "defaultContext")]
+        default_context: Option<GuidRef>,
+    }
+
+    let response: ConnectOverCdpResponse = browser_type
+        .channel()
+        .send("connectOverCDP", Value::Object(params))
+        .await?;
+    let browser: Browser = browser_type
+        .connection()
+        .get_typed(&response.browser.guid)
+        .await?;
+    let default_context = if let Some(context) = response.default_context {
+        Some(browser_type.connection().get_typed(&context.guid).await?)
+    } else {
+        None
+    };
+    Ok((browser, default_context))
+}
+
+async fn create_isolated_context(
+    browser: &Browser,
+    config: &BrowserConfig,
+) -> Result<BrowserContext, CharlotteError> {
+    let mut options = BrowserContextOptions::builder().service_workers("block".to_string());
+    if let Some((width, height)) = config.viewport {
+        options = options.viewport(Viewport { width, height });
+    }
+    if let Some(user_agent) = &config.user_agent {
+        options = options.user_agent(user_agent.clone());
+    }
+    if let Some(path) = &config.storage_state_path {
+        options = options.storage_state_path(path.display().to_string());
+    }
+    Ok(browser.new_context_with_options(options.build()).await?)
+}
+
+async fn configure_context(
+    context: &BrowserContext,
+    config: &BrowserConfig,
+) -> Result<(), CharlotteError> {
+    if matches!(config.automation_profile, AutomationProfile::Stealth) {
+        context.add_init_script(STEALTH_INIT_SCRIPT).await?;
+    }
+    context.add_init_script(CONSOLE_CAPTURE_INIT_SCRIPT).await?;
+    if config.url_policy.block_private_ips {
+        context
+            .add_init_script(ACTIVE_NETWORK_GUARD_INIT_SCRIPT)
+            .await?;
+    }
+    install_network_policy(
+        context,
+        config.block_trackers_and_ads,
+        config.block_fonts,
+        config.url_policy.clone(),
+    )
+    .await
+}
+
 #[async_trait]
 impl BrowserBackend for PlaywrightBackend {
     fn backend_id(&self) -> &'static str {
@@ -261,22 +411,41 @@ impl BrowserBackend for PlaywrightBackend {
     async fn close(&self) -> Result<(), CharlotteError> {
         let mut guard = self.inner.lock().await;
         if let Some(s) = guard.take() {
-            if self.backend_id == "obscura-cdp" {
-                // Disconnect the Playwright driver only. Closing the default page/context
-                // on a shared Obscura browser leaves later CDP sessions with a dead tab.
-                let _ = s.playwright.shutdown().await;
-            } else {
-                s.browser.close().await?;
-                s.playwright.shutdown().await?;
+            match s.owner {
+                Some(BrowserOwner::Launched {
+                    playwright,
+                    browser,
+                }) => {
+                    let browser_result = browser.close().await.map_err(CharlotteError::from);
+                    let driver_result = playwright.shutdown().await.map_err(CharlotteError::from);
+                    browser_result?;
+                    driver_result?;
+                }
+                Some(BrowserOwner::Cdp { playwright }) => {
+                    let context_result = s.context.close().await.map_err(CharlotteError::from);
+                    let driver_result = playwright.shutdown().await.map_err(CharlotteError::from);
+                    context_result?;
+                    driver_result?;
+                }
+                None => {
+                    s.context.close().await?;
+                }
             }
         }
         Ok(())
     }
 
     async fn enforce_url_policy(&self, url: &str) -> Result<(), CharlotteError> {
-        let guard = self.inner.lock().await;
-        let s = guard.as_ref().ok_or(CharlotteError::Closed)?;
-        s.config.url_policy.check(url)
+        let policy = {
+            let guard = self.inner.lock().await;
+            guard
+                .as_ref()
+                .ok_or(CharlotteError::Closed)?
+                .config
+                .url_policy
+                .clone()
+        };
+        policy.check_resolved(url).await
     }
 
     async fn navigate_with_options(
@@ -1053,18 +1222,20 @@ async fn install_network_policy(
     context: &BrowserContext,
     block_trackers: bool,
     block_fonts: bool,
+    url_policy: super::url_policy::UrlPolicy,
 ) -> Result<(), CharlotteError> {
-    if !block_trackers && !block_fonts {
-        return Ok(());
-    }
     context
         .route("**/*", move |route| {
             let block_trackers = block_trackers;
             let block_fonts = block_fonts;
+            let url_policy = url_policy.clone();
             async move {
                 let req = route.request();
                 let url = req.url();
                 let rt = req.resource_type();
+                if url_policy.check_resolved(url).await.is_err() {
+                    return route.abort(Some("blockedbyclient")).await;
+                }
                 if block_trackers && blocklist::url_looks_like_tracker_or_ad(url) {
                     return route.abort(Some("blockedbyclient")).await;
                 }

@@ -14,7 +14,7 @@
 //! |----------|--------|
 //! | `CHARLOTTE_STORAGE_STATE_PATH` | Playwright storage state JSON for logged-in sessions. |
 //! | `CHARLOTTE_SEARCH_BACKEND` | Search backend: `searxng` (default) or `browser` (Playwright HTML scrape). |
-//! | `CHARLOTTE_SEARXNG_URL` | SearXNG base URL when using `searxng` backend (default: `http://127.0.0.1:18088`). Queries pin `engines=duckduckgo`. |
+//! | `CHARLOTTE_SEARXNG_URL` | SearXNG base URL when using the `searxng` backend (default: `http://127.0.0.1:18088`). Queries use the instance's configured engines. |
 //! | `CHARLOTTE_SEARCH_URL_TEMPLATE` | Browser search URL with `{query}` (only when `CHARLOTTE_SEARCH_BACKEND=browser`). |
 //! | `CHARLOTTE_ALLOW_HOST_SUFFIXES` | Comma-separated host suffixes; when non-empty, only those hosts may be loaded. |
 //! | `CHARLOTTE_BLOCK_PRIVATE_IPS` | Set to `1` or `true` to block loopback/private IPs in URLs. |

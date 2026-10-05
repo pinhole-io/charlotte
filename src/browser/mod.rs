@@ -3,6 +3,7 @@
 pub mod backend;
 pub(crate) mod blockdetect;
 pub(crate) mod blocklist;
+pub mod host;
 pub mod obscura;
 pub mod playwright;
 pub mod pool;
@@ -156,6 +157,14 @@ pub struct BrowserHandle {
 }
 
 impl BrowserHandle {
+    /// Wrap an injected backend.
+    #[must_use]
+    pub fn from_backend(backend: Arc<dyn BrowserBackend>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Some(backend))),
+        }
+    }
+
     /// Build a browser handle from env-selected backend settings.
     #[instrument(skip_all)]
     pub async fn from_config(config: BrowserConfig) -> Result<Self, CharlotteError> {
@@ -193,9 +202,7 @@ impl BrowserHandle {
     #[instrument(skip_all)]
     pub async fn new(config: BrowserConfig) -> Result<Self, CharlotteError> {
         let backend = PlaywrightLaunchedBackend::create(config).await?;
-        Ok(Self {
-            inner: Arc::new(Mutex::new(Some(backend))),
-        })
+        Ok(Self::from_backend(backend))
     }
 
     /// Attach to an existing Chromium instance via the Chrome DevTools Protocol (CDP).
@@ -205,9 +212,7 @@ impl BrowserHandle {
         endpoint_url: &str,
     ) -> Result<Self, CharlotteError> {
         let backend = ObscuraCdpBackend::create(config, endpoint_url).await?;
-        Ok(Self {
-            inner: Arc::new(Mutex::new(Some(backend))),
-        })
+        Ok(Self::from_backend(backend))
     }
 
     pub async fn backend_id(&self) -> Result<&'static str, CharlotteError> {
@@ -504,7 +509,14 @@ impl BrowserHandle {
 }
 
 pub(crate) fn tool_error(e: CharlotteError) -> superglue::tools::ToolInvokeError {
-    superglue::tools::ToolInvokeError::handler(e.to_string(), Some("charlotte".to_string()))
+    let (message, code) = match e {
+        CharlotteError::Closed => ("Charlotte browser session is closed", "closed"),
+        CharlotteError::Chat(error) if error.is_cancelled() => {
+            ("Charlotte operation was cancelled", "cancelled")
+        }
+        _ => ("Charlotte operation failed", "charlotte"),
+    };
+    superglue::tools::ToolInvokeError::handler(message, Some(code.to_string()))
 }
 
 #[cfg(test)]

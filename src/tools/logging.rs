@@ -11,7 +11,7 @@ use superglue::tools::{
 use crate::crawl::loopguard::{SharedGuardState, wrap_tool_with_guard};
 
 /// Browser tools return errors to the model instead of aborting the chat loop.
-fn charlotte_browser_tool_policy() -> ToolRetryPolicy {
+pub(crate) fn charlotte_browser_tool_policy() -> ToolRetryPolicy {
     ToolRetryPolicy {
         on_error: OnToolError::Skip,
     }
@@ -22,11 +22,18 @@ pub(crate) async fn register_browser_tool(
     tool: Arc<dyn Tool>,
     guard_state: SharedGuardState,
 ) -> Result<(), ToolInvokeError> {
-    let guarded = wrap_tool_with_guard(tool, guard_state);
-    let logged = wrap_tool_with_logging(guarded);
+    let logged = wrap_browser_tool(tool, guard_state);
     registry
         .register_with_policy(logged, charlotte_browser_tool_policy())
         .await
+}
+
+pub(crate) fn wrap_browser_tool(
+    tool: Arc<dyn Tool>,
+    guard_state: SharedGuardState,
+) -> Arc<dyn Tool> {
+    let guarded = wrap_tool_with_guard(tool, guard_state);
+    wrap_tool_with_logging(guarded)
 }
 
 /// Wraps `tool` so every call (and its outcome) is written to the `tracing` log — useful for
@@ -51,11 +58,9 @@ impl Tool for LoggingTool {
 
     async fn call(&self, arguments: Value) -> Result<Value, ToolInvokeError> {
         let name = self.inner.spec().name;
-        let args_preview = truncate_log_str(&arguments.to_string(), 300);
         tracing::info!(
             target: "charlotte::tools",
             tool = %name,
-            args = %args_preview,
             "tool call started"
         );
         let start = Instant::now();
@@ -64,22 +69,20 @@ impl Tool for LoggingTool {
         match &result {
             Ok(value) => {
                 let outcome = classify_tool_outcome(value);
-                let preview = truncate_log_str(&value.to_string(), 300);
                 tracing::info!(
                     target: "charlotte::tools",
                     tool = %name,
                     elapsed_ms,
                     outcome = %outcome,
-                    result = %preview,
                     "tool call finished"
                 );
             }
-            Err(e) => {
+            Err(error) => {
                 tracing::warn!(
                     target: "charlotte::tools",
                     tool = %name,
                     elapsed_ms,
-                    error = %e,
+                    error = tool_error_class(error),
                     "tool call errored"
                 );
             }
@@ -107,11 +110,10 @@ fn classify_tool_outcome(value: &Value) -> &'static str {
     "ok"
 }
 
-fn truncate_log_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
+fn tool_error_class(error: &ToolInvokeError) -> &'static str {
+    match error {
+        ToolInvokeError::HandlerFailed { .. } => "handler_failed",
+        ToolInvokeError::UnknownTool { .. } => "unknown_tool",
+        ToolInvokeError::DuplicateRegistration { .. } => "duplicate_registration",
     }
-    let mut out: String = s.chars().take(max_chars).collect();
-    out.push('…');
-    out
 }

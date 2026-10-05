@@ -253,9 +253,7 @@ fn rows_empty(rows: &[Value]) -> bool {
 fn build_searxng_search_url(base: &str, query: &str) -> String {
     let base = base.trim().trim_end_matches('/');
     let encoded = urlencoding::encode(query);
-    // Pin DuckDuckGo. The instance default (Bing) treats words like "top"/"best"
-    // as dictionary lookups and returns Cambridge/Merriam-Webster junk.
-    format!("{base}/search?q={encoded}&format=json&engines=duckduckgo")
+    format!("{base}/search?q={encoded}&format=json")
 }
 
 fn parse_searxng_response(
@@ -324,7 +322,7 @@ mod tests {
         let url = build_searxng_search_url("http://127.0.0.1:18088", "site:apple.com social");
         assert_eq!(
             url,
-            "http://127.0.0.1:18088/search?q=site%3Aapple.com%20social&format=json&engines=duckduckgo"
+            "http://127.0.0.1:18088/search?q=site%3Aapple.com%20social&format=json"
         );
     }
 

@@ -12,9 +12,11 @@ pub mod agents;
 pub mod browser;
 pub mod crawl;
 pub mod ingest;
+#[cfg(feature = "notepad")]
 pub mod scratchpad;
 pub mod search;
 pub mod tools;
+#[cfg(feature = "qdrant")]
 pub mod utils;
 
 pub use agents::brief;
@@ -34,6 +36,7 @@ pub use brief::{
     expand_user_request_to_research_brief, expand_user_request_to_research_brief_shaped,
     judge_brief_gate, parse_citations_fenced_json, should_expand_brief, should_expand_brief_llm,
 };
+pub use browser::host::{BrowserHost, BrowserHostConfig};
 pub use browser::url_policy::UrlPolicy;
 pub use browser::{
     AutomationProfile, BrowserBackend, BrowserBackendKind, BrowserConfig, BrowserHandle,
@@ -65,6 +68,7 @@ pub use ingest::markdown::{
     clamp_agent_markdown_chars, document_html_to_markdown, html_to_markdown_limited,
     split_markdown_sections, truncate_str_by_bytes,
 };
+#[cfg(feature = "documents")]
 pub use ingest::parse_document::{
     DOCUMENT_MAX_MARKDOWN_CHARS_DEFAULT, DocumentFormat, parse_document_bytes, parse_document_url,
 };
@@ -74,7 +78,9 @@ pub use ingest::{
     ingest,
 };
 pub use pool::{BrowserPool, DEFAULT_BROWSER_POOL_CAP, default_browser_count};
+#[cfg(feature = "qdrant")]
 pub use qdrant_client::Qdrant;
+#[cfg(feature = "notepad")]
 pub use scratchpad::{
     OffloadConfig, SharedNotepad, charlotte_offload_config, compact_tool_messages,
     make_tool_llm_context, new_notepad, register_charlotte_notepad_offload,
@@ -82,11 +88,16 @@ pub use scratchpad::{
 };
 pub use search::{SearchBackendKind, SearchConfig, web_search};
 pub use tools::{
-    CharlotteToolProfile, ToolLlmContext, charlotte_tool_names, register_charlotte_tools,
+    CharlotteTool, CharlotteToolLimits, CharlotteToolProfile, CharlotteToolSet,
+    RegisteredCharlotteTool, ToolLlmContext, ToolRuntimeContext, charlotte_tool_names,
+    charlotte_tool_specs, register_charlotte_tools,
 };
+#[cfg(feature = "qdrant")]
 pub use utils::qdrant::register_charlotte_qdrant_tools;
+#[cfg(feature = "qdrant")]
 pub use utils::qdrant_crud::{
     PointIdArg, QdrantCrudError, QueryNearestOpts, ScrollOpts, UpsertRow, count_points,
     delete_points_by_ids, get_points, query_nearest, scroll_points, upsert_points,
 };
+#[cfg(feature = "qdrant")]
 pub use utils::qdrant_ingest::{ingest_chunk_payload, ingest_chunks_to_upsert_rows};

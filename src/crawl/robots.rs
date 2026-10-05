@@ -9,29 +9,41 @@ use tracing::instrument;
 use url::Url;
 
 use crate::CharlotteError;
+use crate::UrlPolicy;
+
+const MAX_ROBOTS_BYTES: usize = 256 * 1024;
+const MAX_REDIRECTS: usize = 5;
 
 /// Fetches and caches `robots.txt` per origin (scheme + host + port).
 pub struct RobotsFetcher {
     client: reqwest::Client,
+    policy: UrlPolicy,
     cache: Mutex<HashMap<String, Arc<SimpleRobots>>>,
 }
 
 impl RobotsFetcher {
     /// New HTTP client for robots.txt only (short timeout).
     pub fn new() -> Result<Self, CharlotteError> {
+        Self::with_policy(UrlPolicy::permissive())
+    }
+
+    /// New HTTP client that applies `policy` to every request and redirect.
+    pub fn with_policy(policy: UrlPolicy) -> Result<Self, CharlotteError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .user_agent("Charlotte/0.1")
+            .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|e| CharlotteError::msg(format!("robots HTTP client: {e}")))?;
+            .map_err(|_| CharlotteError::msg("failed to build robots HTTP client"))?;
         Ok(Self {
             client,
+            policy,
             cache: Mutex::new(HashMap::new()),
         })
     }
 
     /// Returns `false` when `Disallow` rules for `User-agent: *` block `url`'s path.
-    #[instrument(skip(self), fields(url = %page_url))]
+    #[instrument(skip_all)]
     pub async fn is_allowed(&self, page_url: &str) -> Result<bool, CharlotteError> {
         let u = Url::parse(page_url).map_err(|e| CharlotteError::msg(e.to_string()))?;
         let robots_url = robots_txt_url(&u)?;
@@ -54,24 +66,59 @@ impl RobotsFetcher {
     }
 
     async fn fetch_parse(&self, robots_url: &Url) -> Result<SimpleRobots, CharlotteError> {
-        let resp = self
-            .client
-            .get(robots_url.as_str())
-            .send()
-            .await
-            .map_err(|e| CharlotteError::msg(format!("robots.txt fetch: {e}")))?;
+        let mut current = robots_url.clone();
+        let mut redirects = 0usize;
+        let mut resp = loop {
+            self.policy.check_resolved(current.as_str()).await?;
+            let response = self
+                .client
+                .get(current.as_str())
+                .send()
+                .await
+                .map_err(|_| CharlotteError::msg("robots.txt fetch failed"))?;
+            if !response.status().is_redirection() {
+                break response;
+            }
+            if redirects >= MAX_REDIRECTS {
+                return Err(CharlotteError::msg("robots.txt redirect limit exceeded"));
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| CharlotteError::msg("robots.txt redirect has no location"))?;
+            current = current
+                .join(location)
+                .map_err(|_| CharlotteError::msg("robots.txt redirect URL is invalid"))?;
+            redirects += 1;
+        };
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(SimpleRobots::default());
         }
         if !status.is_success() {
-            tracing::warn!(%status, url = %robots_url, "robots.txt non-success; treating as empty");
+            tracing::warn!(%status, "robots.txt non-success; treating as empty");
             return Ok(SimpleRobots::default());
         }
-        let text = resp
-            .text()
+        if resp
+            .content_length()
+            .is_some_and(|length| length > MAX_ROBOTS_BYTES as u64)
+        {
+            return Err(CharlotteError::msg("robots.txt body is too large"));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
             .await
-            .map_err(|e| CharlotteError::msg(format!("robots.txt body: {e}")))?;
+            .map_err(|_| CharlotteError::msg("robots.txt body read failed"))?
+        {
+            if body.len().saturating_add(chunk.len()) > MAX_ROBOTS_BYTES {
+                return Err(CharlotteError::msg("robots.txt body is too large"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let text = std::str::from_utf8(&body)
+            .map_err(|_| CharlotteError::msg("robots.txt body is not UTF-8"))?;
         Ok(SimpleRobots::parse(&text))
     }
 }

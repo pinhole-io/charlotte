@@ -14,6 +14,7 @@ pub(crate) mod chunk;
 pub(crate) mod dedup;
 pub(crate) mod extract;
 pub(crate) mod markdown;
+#[cfg(feature = "documents")]
 pub(crate) mod parse_document;
 pub(crate) mod validate;
 

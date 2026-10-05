@@ -6,18 +6,22 @@ mod logging;
 mod map;
 mod names;
 mod page;
+#[cfg(feature = "documents")]
 mod parse;
 mod scrape;
 mod search;
 mod site_crawl;
 
+use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use superglue::chat::ChatOptions;
 use superglue::guardrails::GuardrailRegistry;
 use superglue::hooks::HookRegistry;
 use superglue::http::HttpClient;
-use superglue::tools::{ToolInvokeError, ToolRegistry};
+use superglue::tools::{Tool, ToolInvokeError, ToolRegistry, ToolRetryPolicy, ToolSpec};
 
 use crate::browser::{BrowserConfig, BrowserHandle};
 use crate::crawl::loopguard::{SharedGuardState, new_guard_state};
@@ -26,17 +30,19 @@ use crate::search::SearchConfig;
 
 use agentic::AgenticCrawlTool;
 use llm::{ExtractTool, SummarizeTool};
-use logging::register_browser_tool;
+use logging::{charlotte_browser_tool_policy, register_browser_tool, wrap_browser_tool};
 use map::MapTool;
+#[cfg(feature = "documents")]
+use names::PARSE_DOCUMENT;
 use names::{
     AGENTIC_CRAWL, CONSOLE_MESSAGES, CONTENT, EXTRACT, LINKS, LIST_TABS, MAP, NETWORK_REQUESTS,
-    PAGE_MARKDOWN, PARSE_DOCUMENT, SCRAPE_MANY, SCREENSHOT, SEARCH, SITE_CRAWL_CHUNKS, SUMMARIZE,
-    WAIT_FOR,
+    PAGE_MARKDOWN, SCRAPE_MANY, SCREENSHOT, SEARCH, SITE_CRAWL_CHUNKS, SUMMARIZE, WAIT_FOR,
 };
 use page::{
     ConsoleMessagesTool, ListLinksTool, ListTabsTool, NetworkRequestsTool, PageContentTool,
     PageMarkdownTool, ScreenshotTool, WaitForTool,
 };
+#[cfg(feature = "documents")]
 use parse::ParseDocumentTool;
 use scrape::ScrapeManyTool;
 use search::WebSearchTool;
@@ -60,32 +66,253 @@ pub enum CharlotteToolProfile {
 pub fn charlotte_tool_names(profile: CharlotteToolProfile) -> &'static [&'static str] {
     match profile {
         CharlotteToolProfile::Quick => &[SEARCH, SCRAPE_MANY],
-        CharlotteToolProfile::Full => &[
-            SEARCH,
-            CONTENT,
-            PAGE_MARKDOWN,
-            LINKS,
-            WAIT_FOR,
-            SCREENSHOT,
-            LIST_TABS,
-            MAP,
-            NETWORK_REQUESTS,
-            CONSOLE_MESSAGES,
-            SCRAPE_MANY,
-            EXTRACT,
-            SUMMARIZE,
-            PARSE_DOCUMENT,
-            SITE_CRAWL_CHUNKS,
-            AGENTIC_CRAWL,
-        ],
+        CharlotteToolProfile::Full => {
+            #[cfg(feature = "documents")]
+            {
+                &[
+                    SEARCH,
+                    CONTENT,
+                    PAGE_MARKDOWN,
+                    LINKS,
+                    WAIT_FOR,
+                    SCREENSHOT,
+                    LIST_TABS,
+                    MAP,
+                    NETWORK_REQUESTS,
+                    CONSOLE_MESSAGES,
+                    SCRAPE_MANY,
+                    EXTRACT,
+                    SUMMARIZE,
+                    PARSE_DOCUMENT,
+                    SITE_CRAWL_CHUNKS,
+                    AGENTIC_CRAWL,
+                ]
+            }
+            #[cfg(not(feature = "documents"))]
+            {
+                &[
+                    SEARCH,
+                    CONTENT,
+                    PAGE_MARKDOWN,
+                    LINKS,
+                    WAIT_FOR,
+                    SCREENSHOT,
+                    LIST_TABS,
+                    MAP,
+                    NETWORK_REQUESTS,
+                    CONSOLE_MESSAGES,
+                    SCRAPE_MANY,
+                    EXTRACT,
+                    SUMMARIZE,
+                    SITE_CRAWL_CHUNKS,
+                    AGENTIC_CRAWL,
+                ]
+            }
+        }
     }
 }
 
+#[derive(Clone)]
 pub struct ToolLlmContext {
     pub http: HttpClient,
     pub hooks: Arc<HookRegistry>,
     pub guardrails: Arc<GuardrailRegistry>,
     pub options: ChatOptions,
+}
+
+/// Per-call model and cancellation state supplied by a Charlotte host.
+pub trait ToolRuntimeContext: Send + Sync {
+    /// Build the current model context. `None` disables optional extraction.
+    fn llm_context(&self) -> Result<Option<ToolLlmContext>, ToolInvokeError>;
+
+    /// Resolve when the active host turn is cancelled.
+    fn cancelled(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+struct StaticToolRuntimeContext(ToolLlmContext);
+
+impl ToolRuntimeContext for StaticToolRuntimeContext {
+    fn llm_context(&self) -> Result<Option<ToolLlmContext>, ToolInvokeError> {
+        Ok(Some(self.0.clone()))
+    }
+}
+
+/// One Charlotte tool that a host can select explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CharlotteTool {
+    WebSearch,
+    AgenticCrawl,
+}
+
+impl CharlotteTool {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::WebSearch => SEARCH,
+            Self::AgenticCrawl => AGENTIC_CRAWL,
+        }
+    }
+}
+
+/// Fixed resource caps for host-owned Charlotte tools.
+#[derive(Clone)]
+pub struct CharlotteToolLimits {
+    pub max_search_results: usize,
+    pub max_crawl_pages: usize,
+    pub max_crawl_steps: usize,
+    pub crawl_timeout: std::time::Duration,
+    pub respect_robots: bool,
+}
+
+fn validate_selected_tools(
+    selected: &[CharlotteTool],
+    limits: &CharlotteToolLimits,
+) -> Result<(), ToolInvokeError> {
+    if limits.max_search_results == 0
+        || limits.max_search_results > 20
+        || limits.max_crawl_pages == 0
+        || limits.max_crawl_pages > 50
+        || limits.max_crawl_steps == 0
+        || limits.max_crawl_steps > 200
+        || limits.crawl_timeout.is_zero()
+        || limits.crawl_timeout > std::time::Duration::from_secs(300)
+    {
+        return Err(ToolInvokeError::handler(
+            "Charlotte tool limits are invalid",
+            Some("invalid_limits".to_string()),
+        ));
+    }
+
+    let mut names = HashSet::with_capacity(selected.len());
+    for tool in selected {
+        if !names.insert(tool.name()) {
+            return Err(ToolInvokeError::DuplicateRegistration {
+                name: tool.name().to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Build exact schemas for selected Charlotte tools without browser resources.
+pub fn charlotte_tool_specs(
+    selected: &[CharlotteTool],
+    limits: &CharlotteToolLimits,
+) -> Result<Vec<ToolSpec>, ToolInvokeError> {
+    validate_selected_tools(selected, limits)?;
+    Ok(selected
+        .iter()
+        .map(|tool| match tool {
+            CharlotteTool::WebSearch => search::web_search_spec(limits.max_search_results),
+            CharlotteTool::AgenticCrawl => agentic::agentic_crawl_spec(
+                limits.max_crawl_pages,
+                limits.max_crawl_steps,
+                limits.respect_robots,
+            ),
+        })
+        .collect())
+}
+
+impl Default for CharlotteToolLimits {
+    fn default() -> Self {
+        Self {
+            max_search_results: 20,
+            max_crawl_pages: 50,
+            max_crawl_steps: 200,
+            crawl_timeout: std::time::Duration::from_secs(300),
+            respect_robots: true,
+        }
+    }
+}
+
+/// A tool paired with the error policy Charlotte requires.
+#[derive(Clone)]
+pub struct RegisteredCharlotteTool {
+    pub tool: Arc<dyn Tool>,
+    pub retry_policy: ToolRetryPolicy,
+}
+
+/// Runtime-owned Charlotte tools and their isolated browser context.
+pub struct CharlotteToolSet {
+    browser: Arc<BrowserHandle>,
+    tools: Vec<RegisteredCharlotteTool>,
+}
+
+impl CharlotteToolSet {
+    /// Build an explicit host-selected tool set.
+    pub fn build(
+        browser: BrowserHandle,
+        config: &BrowserConfig,
+        search_config: &SearchConfig,
+        http: &HttpClient,
+        runtime: Option<Arc<dyn ToolRuntimeContext>>,
+        selected: &[CharlotteTool],
+    ) -> Result<Self, ToolInvokeError> {
+        Self::build_with_limits(
+            browser,
+            config,
+            search_config,
+            http,
+            runtime,
+            selected,
+            CharlotteToolLimits::default(),
+        )
+    }
+
+    /// Build an explicit host-selected tool set with stricter host caps.
+    pub fn build_with_limits(
+        browser: BrowserHandle,
+        config: &BrowserConfig,
+        search_config: &SearchConfig,
+        http: &HttpClient,
+        runtime: Option<Arc<dyn ToolRuntimeContext>>,
+        selected: &[CharlotteTool],
+        limits: CharlotteToolLimits,
+    ) -> Result<Self, ToolInvokeError> {
+        validate_selected_tools(selected, &limits)?;
+
+        let browser = Arc::new(browser);
+        let guard_state = new_guard_state();
+        let mut tools = Vec::with_capacity(selected.len());
+        for selected_tool in selected {
+            let tool: Arc<dyn Tool> = match selected_tool {
+                CharlotteTool::WebSearch => Arc::new(WebSearchTool {
+                    browser: Arc::clone(&browser),
+                    http: http.clone(),
+                    search: search_config.clone(),
+                    max_results: limits.max_search_results,
+                }),
+                CharlotteTool::AgenticCrawl => Arc::new(AgenticCrawlTool {
+                    browser: Arc::clone(&browser),
+                    policy: config.url_policy.clone(),
+                    http: http.clone(),
+                    runtime: runtime.clone(),
+                    max_pages: limits.max_crawl_pages,
+                    max_steps: limits.max_crawl_steps,
+                    timeout: limits.crawl_timeout,
+                    respect_robots: limits.respect_robots,
+                }),
+            };
+            tools.push(RegisteredCharlotteTool {
+                tool: wrap_browser_tool(tool, Arc::clone(&guard_state)),
+                retry_policy: charlotte_browser_tool_policy(),
+            });
+        }
+        Ok(Self { browser, tools })
+    }
+
+    /// Return registrations in the caller's selected order.
+    #[must_use]
+    pub fn tools(&self) -> Vec<RegisteredCharlotteTool> {
+        self.tools.clone()
+    }
+
+    /// Close this runtime's isolated browser context.
+    pub async fn close(&self) -> Result<(), crate::CharlotteError> {
+        self.browser.close().await
+    }
 }
 
 /// Register all Charlotte browser tools on `registry`.
@@ -112,6 +339,7 @@ pub async fn register_charlotte_tools(
             browser: Arc::clone(&h),
             http: http.clone(),
             search: search_config.clone(),
+            max_results: 20,
         }),
         Arc::clone(&guard_state),
     )
@@ -212,6 +440,7 @@ async fn register_full_charlotte_tools(
         Arc::clone(guard_state),
     )
     .await?;
+    #[cfg(feature = "documents")]
     register_browser_tool(
         registry,
         Arc::new(ParseDocumentTool(Arc::clone(h))),
@@ -230,7 +459,14 @@ async fn register_full_charlotte_tools(
             browser: Arc::clone(h),
             policy: config.url_policy.clone(),
             http: http.clone(),
-            llm,
+            runtime: llm.map(|context| {
+                Arc::new(StaticToolRuntimeContext(context.as_ref().clone()))
+                    as Arc<dyn ToolRuntimeContext>
+            }),
+            max_pages: 50,
+            max_steps: 200,
+            timeout: std::time::Duration::from_secs(300),
+            respect_robots: true,
         }),
         Arc::clone(guard_state),
     )
@@ -274,5 +510,58 @@ mod profile_tests {
                 "Full profile must not expose {banned}; Jev owns page actions"
             );
         }
+    }
+
+    #[test]
+    fn selected_tool_specs_apply_host_limits_without_browser_resources() {
+        let limits = CharlotteToolLimits {
+            max_search_results: 7,
+            max_crawl_pages: 9,
+            max_crawl_steps: 11,
+            crawl_timeout: std::time::Duration::from_secs(30),
+            respect_robots: true,
+        };
+        let specs = charlotte_tool_specs(
+            &[CharlotteTool::WebSearch, CharlotteTool::AgenticCrawl],
+            &limits,
+        )
+        .expect("valid selected schemas");
+
+        assert_eq!(specs[0].name, "web_search");
+        assert_eq!(
+            specs[0].parameters_schema["properties"]["max_results"]["maximum"],
+            7
+        );
+        assert_eq!(
+            specs[0].parameters_schema["properties"]["max_results"]["default"],
+            7
+        );
+        assert_eq!(specs[1].name, "agentic_crawl");
+        assert_eq!(
+            specs[1].parameters_schema["properties"]["max_pages"]["maximum"],
+            9
+        );
+        assert_eq!(
+            specs[1].parameters_schema["properties"]["max_pages"]["default"],
+            9
+        );
+        assert_eq!(
+            specs[1].parameters_schema["properties"]["max_steps"]["maximum"],
+            11
+        );
+        assert_eq!(
+            specs[1].parameters_schema["properties"]["respect_robots"]["default"],
+            true
+        );
+
+        let default_specs = charlotte_tool_specs(
+            &[CharlotteTool::AgenticCrawl],
+            &CharlotteToolLimits::default(),
+        )
+        .expect("valid default schema");
+        assert_eq!(
+            default_specs[0].parameters_schema["properties"]["max_pages"]["default"],
+            50
+        );
     }
 }

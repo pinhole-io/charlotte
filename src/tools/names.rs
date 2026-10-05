@@ -15,4 +15,5 @@ pub(crate) const NETWORK_REQUESTS: &str = "network_requests";
 pub(crate) const CONSOLE_MESSAGES: &str = "console_messages";
 pub(crate) const EXTRACT: &str = "extract";
 pub(crate) const SUMMARIZE: &str = "summarize";
+#[cfg(feature = "documents")]
 pub(crate) const PARSE_DOCUMENT: &str = "parse_document";

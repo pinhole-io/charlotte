@@ -307,9 +307,7 @@ async fn ask_done(
     )
     .option("no", "Need another page. Pick a next action.");
     let raw = ask_choice(http, credentials, state, "done", question).await?;
-    let done = parse_done(&raw)?;
-    eprintln!("[crawl:jev] done={}", if done { "yes" } else { "no" });
-    Ok(done)
+    parse_done(&raw)
 }
 
 fn parse_done(raw: &str) -> Result<bool, String> {
@@ -878,17 +876,13 @@ pub async fn decide_step(
     let Some(creds) = credentials else {
         return Ok(jev_unavailable_stop());
     };
-    let mut last_err = String::from("jev did not answer");
-    for attempt in 1..=JEV_RETRIES {
+    for _ in 1..=JEV_RETRIES {
         match judge_step(http, creds, ctx).await {
             Ok(decision) => return Ok(decision),
-            Err(err) => {
-                eprintln!("[crawl:jev] attempt {attempt}/{JEV_RETRIES} failed: {err}");
-                last_err = err;
-            }
+            Err(_) => {}
         }
     }
-    tracing::warn!(target: "charlotte::agentic_crawl", error = %last_err, "jev unavailable");
+    tracing::warn!(target: "charlotte::agentic_crawl", "Jev unavailable");
     Ok(jev_unavailable_stop())
 }
 
@@ -1095,7 +1089,6 @@ mod tests {
         assert_eq!(CrawlAct::ScrollDown.as_str(), "scroll_down");
     }
 
-    #[test]
     #[test]
     fn follow_batches_split_for_the_32k_window() {
         let targets: Vec<RawTarget> = (1..=85)

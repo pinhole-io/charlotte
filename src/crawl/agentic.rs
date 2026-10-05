@@ -176,9 +176,9 @@ pub async fn agentic_crawl(
     http: &HttpClient,
     llm: Option<&AgenticLlm>,
 ) -> Result<Value, CharlotteError> {
-    config.url_policy.check(&config.seed_url)?;
+    config.url_policy.check_resolved(&config.seed_url).await?;
     let robots = if config.respect_robots {
-        Some(RobotsFetcher::new()?)
+        Some(RobotsFetcher::with_policy(config.url_policy.clone())?)
     } else {
         None
     };
@@ -195,12 +195,6 @@ pub async fn agentic_crawl(
     }
 
     let creds = typesafe_credentials(llm.map(|l| &l.options), config.use_env_jev);
-    eprintln!(
-        "[crawl] jev_creds={} seed={} goal={}",
-        if creds.is_some() { "yes" } else { "no" },
-        config.seed_url,
-        clip_chars(&config.goal, 80)
-    );
     let input_names = config.input_names();
     let mut visited = HashSet::new();
     visited.insert(page.url.clone());
@@ -236,12 +230,7 @@ pub async fn agentic_crawl(
                 tracing::info!(
                     target: "charlotte::agentic_crawl",
                     step,
-                    url = %page.url,
                     "crawl goal reached"
-                );
-                eprintln!(
-                    "[crawl:step {step}] goal keep=true act=stop target=none extract=false url={}",
-                    page.url
                 );
                 if !already_kept(&kept_pages, &page.url) {
                     kept_pages.push(kept_page_row(&page));
@@ -264,15 +253,6 @@ pub async fn agentic_crawl(
                 "Jev credentials missing. Set TYPESAFE_API_KEY so agentic_crawl can pick actions.",
             ));
         }
-        eprintln!(
-            "[crawl] page title={} scroll={}/{} at_bottom={} targets_raw={} url={}",
-            clip_chars(&page.title, 60),
-            page.scroll_y,
-            page.scroll_height,
-            page.at_page_bottom(),
-            page.targets.len(),
-            page.url
-        );
         let page_url = if page.url.trim().is_empty() {
             config.seed_url.as_str()
         } else {
@@ -343,34 +323,19 @@ pub async fn agentic_crawl(
             heuristic_steps += 1;
         }
         let source = if decision.via_jev { "jev" } else { "no_jev" };
-        let target = decision.target_id.as_deref().unwrap_or("none");
-        let section = decision.section_key.as_deref().unwrap_or("none");
         tracing::info!(
             target: "charlotte::agentic_crawl",
             step,
             source,
             keep = decision.keep,
             act = decision.act.as_str(),
-            target,
-            section,
-            url = %page.url,
             need_extract = decision.need_extract,
             "crawl step decided"
-        );
-        eprintln!(
-            "[crawl:step {step}] {source} keep={} act={} section={section} target={target} extract={} url={}",
-            decision.keep,
-            decision.act.as_str(),
-            decision.need_extract,
-            page.url
         );
 
         if decision.act != CrawlAct::Stop
             && !attempted_actions.insert(action_state_key(&page, &decision))
         {
-            eprintln!(
-                "[crawl:step {step}] repeated action from the same page state; stopping before dispatch"
-            );
             trace.push(json!({
                 "step": step,
                 "url": page.url,
@@ -472,11 +437,6 @@ pub async fn agentic_crawl(
                 visited.insert(next.url.clone());
             }
             if decision.act == CrawlAct::GetLinks {
-                eprintln!(
-                    "[crawl] get_links collected {} targets on {}",
-                    next.targets.len(),
-                    next.url
-                );
                 link_inventories.insert(canonical_page_url(&next.url), next.targets.clone());
                 let _ = count_new_hrefs(&mut seen_hrefs, &next.targets);
             }
@@ -493,11 +453,6 @@ pub async fn agentic_crawl(
                 }
                 if same_document(&page.url, &next.url) {
                     if let Some(href) = followed_href {
-                        eprintln!(
-                            "[crawl] follow stayed on {}; excluding {}",
-                            next.url,
-                            clip_chars(&href, 80)
-                        );
                         exclude_hrefs.insert(canonical_page_url(&href));
                     }
                 } else {
@@ -758,7 +713,7 @@ async fn check_nav(
     page_url: &str,
     url: &str,
 ) -> Result<(), CharlotteError> {
-    policy.check(url)?;
+    policy.check_resolved(url).await?;
     if config.same_origin_only && !targets::same_origin(page_url, url) {
         return Err(CharlotteError::msg("navigation left page origin"));
     }
