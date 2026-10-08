@@ -310,7 +310,7 @@ async fn should_expand_brief_auto(
         BriefMode::Llm => {
             match judge_brief_gate(http, hooks, guardrails, base_opts, user_text).await {
                 Ok(decision) => {
-                    let source = if decision.via_jev { "jev" } else { "llm" };
+                    let source = if decision.via_system_one { "system_one" } else { "llm" };
                     (decision.expand, source, decision.shape)
                 }
                 Err(_) => (should_expand_brief(user_text), "llm->heuristic", None),

@@ -248,7 +248,7 @@ const GET_LINKS_JS: &str = r#"
 }
 "#;
 
-/// Drives Jev actions on the headed Playwright / Obscura page.
+/// Drives System One actions on the headed Playwright / Obscura page.
 pub struct HandlePageActor {
     handle: Arc<BrowserHandle>,
 }

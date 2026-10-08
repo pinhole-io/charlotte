@@ -33,7 +33,7 @@ pub(crate) fn agentic_crawl_spec(
     ToolSpec {
         name: AGENTIC_CRAWL.to_string(),
         description: Some(
-            "The only page-action tool. Jev picks every click, type, follow, back, scroll, and stop. Start from a direct content URL, preferably from web_search; do not use a search-engine results page because search engines commonly block browser automation. Use this once to walk, fill a form, or complete a task on the headed page. Pass user-supplied values in `inputs` (named fields). Do not put secrets in `goal`. You have no click, type, fill, scroll, or navigate tool. site_crawl_chunks is a BFS dump only.".to_string(),
+            "The only page-action tool. System One picks every click, type, follow, back, scroll, and stop. Start from a direct content URL, preferably from web_search; do not use a search-engine results page because search engines commonly block browser automation. Use this once to walk, fill a form, or complete a task on the headed page. Pass user-supplied values in `inputs` (named fields). Do not put secrets in `goal`. You have no click, type, fill, scroll, or navigate tool. site_crawl_chunks is a BFS dump only.".to_string(),
         ),
         static_tool: false,
         parameters_schema: json!({
@@ -43,11 +43,11 @@ pub(crate) fn agentic_crawl_spec(
                 "goal": { "type": "string", "maxLength": MAX_GOAL_CHARS, "description": "What the crawl should find or complete" },
                 "max_pages": { "type": "integer", "minimum": 1, "maximum": max_pages, "default": DEFAULT_MAX_PAGES.min(max_pages) },
                 "max_steps": { "type": "integer", "minimum": 1, "maximum": max_steps, "default": DEFAULT_MAX_STEPS.min(max_steps) },
-                "same_origin_only": { "type": "boolean", "description": "If true, only follow same-origin URLs. Default false: Jev may follow any in-page href that UrlPolicy allows.", "default": false },
-                "input_text": { "type": "string", "maxLength": MAX_INPUT_CHARS, "description": "A single value to type when Jev picks type (search box). Use `inputs` for a form with more than one field." },
-                "inputs": { "type": "object", "maxProperties": MAX_INPUTS, "description": "Named non-secret values Jev may type. Jev picks the field and the name. Use credential for passwords or other secrets.", "additionalProperties": { "type": "string", "maxLength": MAX_INPUT_CHARS } },
+                "same_origin_only": { "type": "boolean", "description": "If true, only follow same-origin URLs. Default false: System One may follow any in-page href that UrlPolicy allows.", "default": false },
+                "input_text": { "type": "string", "maxLength": MAX_INPUT_CHARS, "description": "A single value to type when System One picks type (search box). Use `inputs` for a form with more than one field." },
+                "inputs": { "type": "object", "maxProperties": MAX_INPUTS, "description": "Named non-secret values System One may type. System One picks the field and the name. Use credential for passwords or other secrets.", "additionalProperties": { "type": "string", "maxLength": MAX_INPUT_CHARS } },
                 "credential": { "type": "string", "maxLength": MAX_CREDENTIAL_ALIAS_CHARS, "pattern": "^[a-z0-9-]+$", "description": "A host-owned credential profile alias. The host resolves its values after approval; the model never sees them. Do not combine this with input_text or inputs." },
-                "extract_schema": { "type": "object", "description": "Optional JSON schema for chat extract when Jev sets need_extract" },
+                "extract_schema": { "type": "object", "description": "Optional JSON schema for chat extract when System One sets need_extract" },
                 "respect_robots": { "type": "boolean", "default": respect_robots, "description": "Fetch and enforce robots.txt for each origin." }
             },
             "required": ["seed_url", "goal"],

@@ -49,7 +49,7 @@ use scrape::ScrapeManyTool;
 use search::WebSearchTool;
 use site_crawl::SiteCrawlChunksTool;
 
-// Only read tools and `agentic_crawl` are registered. Jev owns every page
+// Only read tools and `agentic_crawl` are registered. System One owns every page
 // action, so no click, type, scroll, navigate, or script tool is exposed.
 
 /// Which Charlotte browser tools to register on a registry.
@@ -534,7 +534,7 @@ mod profile_tests {
         ] {
             assert!(
                 !names.contains(&banned),
-                "Full profile must not expose {banned}; Jev owns page actions"
+                "Full profile must not expose {banned}; System One owns page actions"
             );
         }
     }

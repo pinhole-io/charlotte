@@ -1,4 +1,4 @@
-//! Jev-guided crawl against Wiremock + a scripted page actor (no Chrome, no TypeSafe).
+//! System One–guided crawl against Wiremock + a scripted page actor (no Chrome, no TypeSafe).
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use superglue::providers::{ProviderCredentials, ProviderId};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn jev_answer(id: &str, choice: &str) -> serde_json::Value {
+fn system_one_answer(id: &str, choice: &str) -> serde_json::Value {
     json!({
         "model": "jev-latest",
         "answers": {
@@ -29,18 +29,18 @@ fn jev_answer(id: &str, choice: &str) -> serde_json::Value {
     })
 }
 
-async fn mount_jev_once(mock: &MockServer, id: &str, choice: &str) {
+async fn mount_system_one_once(mock: &MockServer, id: &str, choice: &str) {
     Mock::given(method("POST"))
         .and(path("/v1/systemone"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(jev_answer(id, choice)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(system_one_answer(id, choice)))
         .up_to_n_times(1)
         .mount(mock)
         .await;
 }
 
-async fn mount_jev_sequence(mock: &MockServer, pairs: &[(&str, &str)]) {
+async fn mount_system_one_sequence(mock: &MockServer, pairs: &[(&str, &str)]) {
     for (id, choice) in pairs {
-        mount_jev_once(mock, id, choice).await;
+        mount_system_one_once(mock, id, choice).await;
     }
 }
 
@@ -61,10 +61,10 @@ fn mock_llm(http: &HttpClient, mock_uri: String) -> AgenticLlm {
     }
 }
 
-async fn mount_jev_rest(mock: &MockServer, id: &str, choice: &str) {
+async fn mount_system_one_rest(mock: &MockServer, id: &str, choice: &str) {
     Mock::given(method("POST"))
         .and(path("/v1/systemone"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(jev_answer(id, choice)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(system_one_answer(id, choice)))
         .mount(mock)
         .await;
 }
@@ -118,7 +118,7 @@ fn page_two_links(
 #[tokio::test]
 async fn agentic_crawl_uses_system_one_then_stops() {
     let mock = MockServer::start().await;
-    mount_jev_rest(&mock, "done", "yes").await;
+    mount_system_one_rest(&mock, "done", "yes").await;
 
     let http = HttpClient::new(ClientConfig::default()).expect("http");
     let mut creds = ProviderCredentials::new();
@@ -143,7 +143,7 @@ async fn agentic_crawl_uses_system_one_then_stops() {
         "https://example.com/rust",
     )]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "read the rust book");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 3;
     cfg.max_pages = 5;
 
@@ -151,15 +151,15 @@ async fn agentic_crawl_uses_system_one_then_stops() {
         .await
         .expect("crawl");
     assert_eq!(out["ok"], json!(true));
-    assert_eq!(out["stopped_reason"], json!("jev_stop"));
+    assert_eq!(out["stopped_reason"], json!("system_one_stop"));
     assert_eq!(out["pages_kept"], json!(1));
-    assert_eq!(out["via_jev"]["steps"], json!(1));
+    assert_eq!(out["via_system_one"]["steps"], json!(1));
     assert!(actor.actions.iter().any(|a| a == "start"));
     assert!(actor.actions.iter().any(|a| a == "stop"));
 }
 
 #[tokio::test]
-async fn agentic_crawl_without_jev_does_not_follow() {
+async fn agentic_crawl_without_system_one_does_not_follow() {
     let http = HttpClient::new(ClientConfig::default()).expect("http");
     let mut actor = ScriptedPageActor::new(vec![page(
         "https://example.com/",
@@ -168,33 +168,33 @@ async fn agentic_crawl_without_jev_does_not_follow() {
         "https://example.com/docs",
     )]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "docs coverage");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 2;
     cfg.max_pages = 2;
 
     let err = agentic_crawl(&mut actor, &cfg, &http, None)
         .await
-        .expect_err("crawl must require Jev credentials");
+        .expect_err("crawl must require System One credentials");
     assert!(
         err.to_string().contains("TYPESAFE_API_KEY"),
         "expected credentials error, got {err}"
     );
     assert!(
         !actor.actions.iter().any(|a| a.starts_with("follow:")),
-        "must not follow without Jev, actions={:?}",
+        "must not follow without System One, actions={:?}",
         actor.actions
     );
 }
 
 #[tokio::test]
-async fn agentic_crawl_jev_follow_then_stop() {
+async fn agentic_crawl_system_one_follow_then_stop() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(
+    mount_system_one_sequence(
         &mock,
         &[("done", "no"), ("act", "follow"), ("target", "t001")],
     )
     .await;
-    mount_jev_rest(&mock, "done", "yes").await;
+    mount_system_one_rest(&mock, "done", "yes").await;
 
     let http = HttpClient::new(ClientConfig::default()).expect("http");
     let mut creds = ProviderCredentials::new();
@@ -227,7 +227,7 @@ async fn agentic_crawl_jev_follow_then_stop() {
         ),
     ]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "docs coverage");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 4;
     cfg.max_pages = 4;
 
@@ -235,20 +235,20 @@ async fn agentic_crawl_jev_follow_then_stop() {
         .await
         .expect("crawl");
     assert_eq!(out["ok"], json!(true));
-    assert_eq!(out["stopped_reason"], json!("jev_stop"));
+    assert_eq!(out["stopped_reason"], json!("system_one_stop"));
     assert!(
         actor.actions.iter().any(|a| a == "follow:t1"),
-        "expected Jev follow, got {:?}",
+        "expected System One follow, got {:?}",
         actor.actions
     );
-    assert_eq!(out["via_jev"]["steps"], json!(2));
+    assert_eq!(out["via_system_one"]["steps"], json!(2));
 }
 
 #[tokio::test]
-async fn agentic_crawl_jev_get_links_then_stop() {
+async fn agentic_crawl_system_one_get_links_then_stop() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(&mock, &[("done", "no"), ("act", "get_links")]).await;
-    mount_jev_rest(&mock, "done", "yes").await;
+    mount_system_one_sequence(&mock, &[("done", "no"), ("act", "get_links")]).await;
+    mount_system_one_rest(&mock, "done", "yes").await;
 
     let http = HttpClient::new(ClientConfig::default()).expect("http");
     let mut creds = ProviderCredentials::new();
@@ -273,7 +273,7 @@ async fn agentic_crawl_jev_get_links_then_stop() {
         "https://example.com/docs",
     )]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "docs coverage");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 4;
     cfg.max_pages = 4;
 
@@ -286,14 +286,14 @@ async fn agentic_crawl_jev_get_links_then_stop() {
         "expected get_links, got {:?}",
         actor.actions
     );
-    assert_eq!(out["stopped_reason"], json!("jev_stop"));
+    assert_eq!(out["stopped_reason"], json!("system_one_stop"));
 }
 
 #[tokio::test]
-async fn agentic_crawl_jev_scroll_then_stop() {
+async fn agentic_crawl_system_one_scroll_then_stop() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(&mock, &[("done", "no"), ("act", "scroll_down")]).await;
-    mount_jev_rest(&mock, "done", "yes").await;
+    mount_system_one_sequence(&mock, &[("done", "no"), ("act", "scroll_down")]).await;
+    mount_system_one_rest(&mock, "done", "yes").await;
 
     let http = HttpClient::new(ClientConfig::default()).expect("http");
     let mut creds = ProviderCredentials::new();
@@ -324,7 +324,7 @@ async fn agentic_crawl_jev_scroll_then_stop() {
     long_page.at_bottom = false;
     let mut actor = ScriptedPageActor::new(vec![long_page]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "docs coverage");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 4;
     cfg.max_pages = 4;
 
@@ -337,13 +337,13 @@ async fn agentic_crawl_jev_scroll_then_stop() {
         "expected scroll, got {:?}",
         actor.actions
     );
-    assert_eq!(out["stopped_reason"], json!("jev_stop"));
+    assert_eq!(out["stopped_reason"], json!("system_one_stop"));
 }
 
 #[tokio::test]
 async fn agentic_crawl_stops_before_repeating_an_action_from_the_same_page_state() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(
+    mount_system_one_sequence(
         &mock,
         &[
             ("done", "no"),
@@ -373,7 +373,7 @@ async fn agentic_crawl_stops_before_repeating_an_action_from_the_same_page_state
     long_page.at_bottom = false;
     let mut actor = ScriptedPageActor::new(vec![long_page]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "find the docs");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 4;
     cfg.max_pages = 4;
 
@@ -434,14 +434,14 @@ async fn agentic_crawl_rejects_back_on_the_seed_page() {
         "https://example.com/guide",
     )]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "find the changelog");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 6;
     cfg.max_pages = 6;
 
     let out = agentic_crawl(&mut actor, &cfg, &http, Some(&llm))
         .await
         .expect("crawl");
-    assert_eq!(out["stopped_reason"], json!("jev_unavailable"));
+    assert_eq!(out["stopped_reason"], json!("system_one_unavailable"));
     assert!(
         !actor
             .actions
@@ -452,11 +452,11 @@ async fn agentic_crawl_rejects_back_on_the_seed_page() {
     );
 }
 
-/// A dead end is recoverable: Jev follows a link, then walks the trail back.
+/// A dead end is recoverable: System One follows a link, then walks the trail back.
 #[tokio::test]
-async fn agentic_crawl_jev_back_returns_to_the_previous_page() {
+async fn agentic_crawl_system_one_back_returns_to_the_previous_page() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(
+    mount_system_one_sequence(
         &mock,
         &[
             ("done", "no"),
@@ -501,7 +501,7 @@ async fn agentic_crawl_jev_back_returns_to_the_previous_page() {
         ),
     ]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "find the changelog");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 4;
     cfg.max_pages = 4;
 
@@ -509,7 +509,7 @@ async fn agentic_crawl_jev_back_returns_to_the_previous_page() {
         .await
         .expect("crawl");
     assert_eq!(out["ok"], json!(true));
-    assert_eq!(out["stopped_reason"], json!("jev_stop"));
+    assert_eq!(out["stopped_reason"], json!("system_one_stop"));
     assert!(
         actor
             .actions
@@ -533,7 +533,7 @@ async fn agentic_crawl_jev_back_returns_to_the_previous_page() {
 #[tokio::test]
 async fn agentic_crawl_second_follow_from_a_page_cannot_reuse_the_first_href() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(
+    mount_system_one_sequence(
         &mock,
         &[
             ("done", "no"),
@@ -587,7 +587,7 @@ async fn agentic_crawl_second_follow_from_a_page_cannot_reuse_the_first_href() {
         ),
     ]);
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "find a laptop listing");
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 6;
     cfg.max_pages = 6;
 
@@ -640,7 +640,7 @@ fn credential_page(url: &str, reflected: Option<&str>, kind: &str) -> ObservePag
 #[tokio::test]
 async fn credential_crawl_stops_after_javascript_navigation_leaves_origin() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(
+    mount_system_one_sequence(
         &mock,
         &[("done", "no"), ("act", "click"), ("target", "t001")],
     )
@@ -652,7 +652,7 @@ async fn credential_crawl_stops_after_javascript_navigation_leaves_origin() {
         credential_page("https://wrong.example/collect", None, "input"),
     ]);
     let mut config = AgenticCrawlConfig::new("https://example.com/login", "sign in");
-    config.use_env_jev = false;
+    config.use_env_system_one = false;
     config.max_steps = 3;
     config.inputs = vec![charlotte::CrawlInput::new("password", "marker-password")];
     config.credential_origins = Some(vec!["https://example.com".to_string()]);
@@ -671,14 +671,14 @@ async fn credential_crawl_stops_after_javascript_navigation_leaves_origin() {
 }
 
 #[tokio::test]
-async fn credential_crawl_redacts_reflected_values_before_jev_and_result() {
+async fn credential_crawl_redacts_reflected_values_before_system_one_and_result() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(
+    mount_system_one_sequence(
         &mock,
         &[("done", "no"), ("act", "type"), ("target", "t001")],
     )
     .await;
-    mount_jev_rest(&mock, "done", "yes").await;
+    mount_system_one_rest(&mock, "done", "yes").await;
     let http = HttpClient::new(ClientConfig::default()).expect("http");
     let llm = mock_llm(&http, mock.uri());
     let mut actor = ScriptedPageActor::new(vec![
@@ -690,7 +690,7 @@ async fn credential_crawl_redacts_reflected_values_before_jev_and_result() {
         ),
     ]);
     let mut config = AgenticCrawlConfig::new("https://example.com/login", "sign in");
-    config.use_env_jev = false;
+    config.use_env_system_one = false;
     config.max_steps = 3;
     config.inputs = vec![charlotte::CrawlInput::new("password", "marker-password")];
     config.credential_origins = Some(vec!["https://example.com".to_string()]);
@@ -714,9 +714,9 @@ async fn credential_crawl_redacts_reflected_values_before_jev_and_result() {
 }
 
 #[tokio::test]
-async fn agentic_crawl_jev_done_yes_keeps_listing_and_stops() {
+async fn agentic_crawl_system_one_done_yes_keeps_listing_and_stops() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(
+    mount_system_one_sequence(
         &mock,
         &[
             ("done", "no"),
@@ -754,7 +754,7 @@ async fn agentic_crawl_jev_done_yes_keeps_listing_and_stops() {
         "https://www.craigslist.org/search/area/fresno?cat=sya",
         "find a current laptop listing",
     );
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 6;
     cfg.max_pages = 6;
 
@@ -762,7 +762,7 @@ async fn agentic_crawl_jev_done_yes_keeps_listing_and_stops() {
         .await
         .expect("crawl");
     assert_eq!(out["ok"], json!(true));
-    assert_eq!(out["stopped_reason"], json!("jev_stop"));
+    assert_eq!(out["stopped_reason"], json!("system_one_stop"));
     assert_eq!(out["pages_kept"], json!(2));
     let acts: Vec<&str> = out["trace"]
         .as_array()
@@ -784,9 +784,9 @@ async fn agentic_crawl_jev_done_yes_keeps_listing_and_stops() {
 }
 
 #[tokio::test]
-async fn agentic_crawl_jev_keeps_going_until_enough_results() {
+async fn agentic_crawl_system_one_keeps_going_until_enough_results() {
     let mock = MockServer::start().await;
-    mount_jev_sequence(
+    mount_system_one_sequence(
         &mock,
         &[
             ("done", "no"),
@@ -838,7 +838,7 @@ async fn agentic_crawl_jev_keeps_going_until_enough_results() {
         "https://www.craigslist.org/search/area/fresno?cat=sya",
         "find 2 current laptop listings",
     );
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 8;
     cfg.max_pages = 8;
 
@@ -846,7 +846,7 @@ async fn agentic_crawl_jev_keeps_going_until_enough_results() {
         .await
         .expect("crawl");
     assert_eq!(out["ok"], json!(true));
-    assert_eq!(out["stopped_reason"], json!("jev_stop"));
+    assert_eq!(out["stopped_reason"], json!("system_one_stop"));
     let titles: Vec<&str> = out["pages"]
         .as_array()
         .expect("pages")
@@ -890,7 +890,7 @@ async fn agentic_crawl_stops_when_goal_page_reached() {
         "https://en.wikipedia.org/wiki/Dog_food",
         "reach Dog food from Sun",
     );
-    cfg.use_env_jev = false;
+    cfg.use_env_system_one = false;
     cfg.max_steps = 8;
     cfg.max_pages = 8;
 
@@ -912,7 +912,7 @@ async fn agentic_crawl_stops_when_goal_page_reached() {
 async fn agentic_crawl_live_example_com() {
     let http = HttpClient::new(ClientConfig::default()).expect("http");
     let mut cfg = AgenticCrawlConfig::new("https://example.com/", "read the example page heading");
-    cfg.use_env_jev = true;
+    cfg.use_env_system_one = true;
     cfg.max_steps = 2;
     cfg.max_pages = 1;
     cfg.same_origin_only = true;

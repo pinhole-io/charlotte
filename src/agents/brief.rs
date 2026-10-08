@@ -57,7 +57,7 @@ pub enum BriefMode {
     Never,
 }
 
-const BRIEF_JEV_TIMEOUT: Duration = Duration::from_millis(400);
+const BRIEF_SYSTEM_ONE_TIMEOUT: Duration = Duration::from_millis(400);
 const BRIEF_CHOICE_MIN_CONFIDENCE: f64 = 0.6;
 
 /// Closed task shape for brief process hints.
@@ -92,12 +92,12 @@ impl BriefTaskShape {
     }
 }
 
-/// Result of the brief gate, including an optional Jev task shape.
+/// Result of the brief gate, including an optional System One task shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BriefGateDecision {
     pub expand: bool,
     pub shape: Option<BriefTaskShape>,
-    pub via_jev: bool,
+    pub via_system_one: bool,
 }
 
 impl BriefMode {
@@ -180,7 +180,7 @@ pub fn brief_task_process_hints(user_query: &str, config: &SearchConfig) -> Stri
     brief_task_process_hints_shaped(user_query, config, None)
 }
 
-/// Process hints with an optional closed shape from Jev.
+/// Process hints with an optional closed shape from System One.
 #[must_use]
 pub fn brief_task_process_hints_shaped(
     user_query: &str,
@@ -364,7 +364,7 @@ pub fn should_expand_brief(user_text: &str) -> bool {
     word_count > 30
 }
 
-/// LLM or Jev gate for whether a user request should be expanded into a research brief.
+/// LLM or System One gate for whether a user request should be expanded into a research brief.
 ///
 /// Returns `true` for BRIEF and `false` for DIRECT.
 pub async fn should_expand_brief_llm(
@@ -381,7 +381,7 @@ pub async fn should_expand_brief_llm(
     )
 }
 
-/// Brief gate with optional Jev task shape. TypeSafe Choice when credentials exist.
+/// Brief gate with optional System One task shape. TypeSafe Choice when credentials exist.
 pub async fn judge_brief_gate(
     http: &HttpClient,
     hooks: &HookRegistry,
@@ -390,13 +390,13 @@ pub async fn judge_brief_gate(
     user_text: &str,
 ) -> Result<BriefGateDecision, CharlotteError> {
     if let Some(creds) = typesafe_credentials(base_options) {
-        match judge_brief_jev(http, &creds, user_text).await {
+        match judge_brief_system_one(http, &creds, user_text).await {
             Some(decision) => return Ok(decision),
             None => {
                 return Ok(BriefGateDecision {
                     expand: should_expand_brief(user_text),
                     shape: None,
-                    via_jev: false,
+                    via_system_one: false,
                 });
             }
         }
@@ -419,14 +419,14 @@ pub async fn judge_brief_gate(
         return Ok(BriefGateDecision {
             expand: true,
             shape: None,
-            via_jev: false,
+            via_system_one: false,
         });
     }
     if token.contains("DIRECT") {
         return Ok(BriefGateDecision {
             expand: false,
             shape: None,
-            via_jev: false,
+            via_system_one: false,
         });
     }
     Err(CharlotteError::msg(format!(
@@ -444,7 +444,7 @@ fn typesafe_credentials(options: &ChatOptions) -> Option<ProviderCredentials> {
     env.has_key(ProviderId::TypeSafe).then_some(env)
 }
 
-async fn judge_brief_jev(
+async fn judge_brief_system_one(
     http: &HttpClient,
     credentials: &ProviderCredentials,
     user_text: &str,
@@ -473,7 +473,7 @@ async fn judge_brief_jev(
     let request = SystemOneRequest::new(clip_state(user_text, 0), questions)
         .with_model("typesafe:jev-latest");
     let work = system_one(http, credentials, request);
-    let response = tokio::time::timeout(BRIEF_JEV_TIMEOUT, work)
+    let response = tokio::time::timeout(BRIEF_SYSTEM_ONE_TIMEOUT, work)
         .await
         .ok()?
         .ok()?;
@@ -491,7 +491,7 @@ async fn judge_brief_jev(
     Some(BriefGateDecision {
         expand,
         shape,
-        via_jev: true,
+        via_system_one: true,
     })
 }
 
@@ -519,7 +519,7 @@ pub async fn expand_user_request_to_research_brief(
     .await
 }
 
-/// Expand a user request, using an optional Jev task shape for process hints.
+/// Expand a user request, using an optional System One task shape for process hints.
 pub async fn expand_user_request_to_research_brief_shaped(
     http: &HttpClient,
     hooks: &HookRegistry,

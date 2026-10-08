@@ -6,7 +6,7 @@
 # ///
 """Local Browser Use sidecar for Charlotte agentic_crawl.
 
-Speaks one JSON object per line on stdin/stdout. Does not call Jev or Cloud.
+Speaks one JSON object per line on stdin/stdout. Does not call System One or Cloud.
 Does not read API keys. Connects to an existing CDP browser (Obscura).
 """
 

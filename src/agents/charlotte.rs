@@ -12,12 +12,12 @@ pub fn charlotte_agent_spec() -> AgentSpec {
     )
     .with_goal("Answer the user's question using the tool registry. Tool names, parameters, and behavior are defined in the provided schemas—use those directly.")
     .with_goal("Do the work the user asks for. Deny a request only when it is impossible: no registered tool provides the capability, the site blocks the action, or a tool returns an error. When you must deny, name the tool you tried and the exact blocker—never decline a task the tools can perform.")
-    .with_goal("Jev is the only model that picks a page action. For any walk, form, click, type, follow, back, or scroll: call `agentic_crawl` once with the seed URL and the goal. Put every user-supplied value in `inputs` as named fields (for example email and password). Do not put those values in `goal`. Jev picks the field and the name; it never sees the values. Do not refuse a field because of its name or label, and do not advise the user about their own input.")
+    .with_goal("System One is the only model that picks a page action. For any walk, form, click, type, follow, back, or scroll: call `agentic_crawl` once with the seed URL and the goal. Put every user-supplied value in `inputs` as named fields (for example email and password). Do not put those values in `goal`. System One picks the field and the name; it never sees the values. Do not refuse a field because of its name or label, and do not advise the user about their own input.")
     .with_goal("Treat the user message (and any prepended research brief) as the source of task-specific goals, sources, method, and constraints.")
     .with_goal("Keep using tools until you have enough evidence from tool output to answer well; do not stop after one shallow pass unless the request is trivial.")
     .with_goal("If a tool returns blocked, url_repeated, duplicate_call, site_operator_unsupported, or empty results, change query, source, or strategy—do not repeat the same failing call. For site_operator_unsupported, omit `site:` and use plain keywords or navigate to a known URL.")
     .with_goal("If tool output is a notepad stub (`notepad_ref` or `retrieve.id`), treat it as a pointer, not the answer. Call `notepad` with `action=read` and that id when you need the full content; use `action=store` for distilled findings worth keeping. Never re-issue the original tool to recover offloaded content.")
-    .with_goal("You have no click, type, fill, press_key, scroll, navigate, or eval_js tool. Those decisions belong to Jev inside `agentic_crawl`. Do not call `list_links` or `site_crawl_chunks` to walk. Read `stopped_reason` and `trace` from the `agentic_crawl` result. Do not treat a notepad preview of page chrome as the crawl outcome.")
+    .with_goal("You have no click, type, fill, press_key, scroll, navigate, or eval_js tool. Those decisions belong to System One inside `agentic_crawl`. Do not call `list_links` or `site_crawl_chunks` to walk. Read `stopped_reason` and `trace` from the `agentic_crawl` result. Do not treat a notepad preview of page chrome as the crawl outcome.")
     .with_constraint("Never invent a destination URL or a wiki path such as `/wiki/Dog_food`. Reach a page only by `agentic_crawl` following in-page links.")
     .with_constraint("Do not invent URLs, quotes, or facts not supported by tool output; say when uncertain.")
     .with_constraint("Never use web_search to look up your own tool names or parameters.")
@@ -85,11 +85,11 @@ mod tests {
     }
 
     #[test]
-    fn charlotte_spec_routes_actions_and_inputs_through_jev() {
+    fn charlotte_spec_routes_actions_and_inputs_through_system_one() {
         let prompt = charlotte_agent_spec().compile_system_prompt();
         assert!(
-            prompt.contains("Jev is the only model that picks a page action"),
-            "spec must make Jev the only action picker"
+            prompt.contains("System One is the only model that picks a page action"),
+            "spec must make System One the only action picker"
         );
         assert!(
             prompt.contains("Put every user-supplied value in `inputs`"),
@@ -148,8 +148,8 @@ mod tests {
             "spec must name the action tools Charlotte does not have"
         );
         assert!(
-            prompt.contains("Those decisions belong to Jev inside `agentic_crawl`"),
-            "spec must route every page action through Jev"
+            prompt.contains("Those decisions belong to System One inside `agentic_crawl`"),
+            "spec must route every page action through System One"
         );
     }
 }

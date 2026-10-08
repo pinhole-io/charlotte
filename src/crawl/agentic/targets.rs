@@ -1,4 +1,4 @@
-//! Filter and rank observe targets before they go to Jev.
+//! Filter and rank observe targets before they go to System One.
 
 use std::collections::{HashMap, HashSet};
 
@@ -164,7 +164,7 @@ pub fn filter_targets(
 }
 
 /// Score by goal overlap: last path segment counts double, then label.
-/// Keep every target. Jev pages the list across requests.
+/// Keep every target. System One pages the list across requests.
 #[must_use]
 pub fn rank_targets(goal: &str, filtered: Vec<RawTarget>) -> Vec<RawTarget> {
     let goal_tokens = tokenize_for_rank(goal);
@@ -191,7 +191,7 @@ pub fn rank_targets(goal: &str, filtered: Vec<RawTarget>) -> Vec<RawTarget> {
 
 /// Filter then rank. Used for the observed click/type menu only.
 #[must_use]
-pub fn select_jev_targets(
+pub fn select_crawl_targets(
     raw: &[RawTarget],
     goal: &str,
     policy: &UrlPolicy,
@@ -270,7 +270,7 @@ pub fn without_tried_follows(candidates: Vec<RawTarget>, tried_hrefs: &[String])
 /// Group followable links by `(region, section)`. Content first. Nav and
 /// unclassified chrome (`other`) last.
 ///
-/// Grouping is only reading order. Jev does not pick a heading first.
+/// Grouping is only reading order. System One does not pick a heading first.
 #[must_use]
 pub fn group_link_sections(filtered: Vec<RawTarget>) -> Vec<LinkSection> {
     let mut body_order: Vec<(String, String)> = Vec::new();
@@ -307,7 +307,7 @@ pub fn group_link_sections(filtered: Vec<RawTarget>) -> Vec<LinkSection> {
     sections
 }
 
-/// Flatten grouped links in reading order. Jev pages the list across requests.
+/// Flatten grouped links in reading order. System One pages the list across requests.
 #[must_use]
 pub fn follow_menu(sections: &[LinkSection]) -> Vec<RawTarget> {
     sections
@@ -1087,7 +1087,7 @@ mod tests {
         exclude.insert(canonical_page_url(
             "https://en.wikipedia.org/wiki/Help:Contents",
         ));
-        let out = select_jev_targets(
+        let out = select_crawl_targets(
             &raw,
             "page on dogs",
             &policy,
@@ -1115,14 +1115,14 @@ mod tests {
         let mut from_humans = HashSet::new();
         from_humans.insert(canonical_page_url(about));
         let on_humans =
-            select_jev_targets(&raw, "page on dogs", &policy, humans, false, &from_humans);
+            select_crawl_targets(&raw, "page on dogs", &policy, humans, false, &from_humans);
         let ids: Vec<&str> = on_humans.iter().map(|t| t.id.as_str()).collect();
         assert!(!ids.contains(&"t6"));
         assert!(ids.contains(&"t9"));
 
         let mut from_help = HashSet::new();
         from_help.insert(canonical_page_url(humans));
-        let on_help = select_jev_targets(&raw, "page on dogs", &policy, help, false, &from_help);
+        let on_help = select_crawl_targets(&raw, "page on dogs", &policy, help, false, &from_help);
         let ids: Vec<&str> = on_help.iter().map(|t| t.id.as_str()).collect();
         assert!(ids.contains(&"t6"));
         assert!(ids.contains(&"t9"));

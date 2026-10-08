@@ -1,4 +1,4 @@
-//! Jev (System One) step decisions. Every crawl action comes from Jev.
+//! System One (System One) step decisions. Every crawl action comes from System One.
 
 use std::time::Duration;
 
@@ -13,13 +13,13 @@ use super::targets::{
 };
 use crate::CharlotteError;
 
-const JEV_TIMEOUT: Duration = Duration::from_secs(15);
-const JEV_RETRIES: u8 = 2;
-const JEV_MIN_CONFIDENCE: f64 = 0.4;
-/// One Choice per request. 40 rich options stay inside Jev's 32k token window.
-const JEV_BATCH_CAP: usize = 40;
+const SYSTEM_ONE_TIMEOUT: Duration = Duration::from_secs(15);
+const SYSTEM_ONE_RETRIES: u8 = 2;
+const SYSTEM_ONE_MIN_CONFIDENCE: f64 = 0.4;
+/// One Choice per request. 40 rich options stay inside System One's 32k token window.
+const SYSTEM_ONE_BATCH_CAP: usize = 40;
 
-/// Closed actions Jev may pick.
+/// Closed actions System One may pick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrawlAct {
     Click,
@@ -66,7 +66,7 @@ impl CrawlAct {
     }
 }
 
-/// One Jev (or heuristic) decision for a step.
+/// One System One (or heuristic) decision for a step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepDecision {
     pub keep: bool,
@@ -76,7 +76,7 @@ pub struct StepDecision {
     /// Which named input to type. `None` means the single unnamed value.
     pub input_name: Option<String>,
     pub need_extract: bool,
-    pub via_jev: bool,
+    pub via_system_one: bool,
 }
 
 /// One hop already walked, oldest first.
@@ -93,13 +93,13 @@ pub struct TriedHop {
     pub landed_title: String,
 }
 
-/// Inputs for one Jev/heuristic step (keeps call sites under the argument lint).
+/// Inputs for one System One/heuristic step (keeps call sites under the argument lint).
 pub struct StepCtx<'a> {
     pub goal: &'a str,
     pub page: &'a ObservePage,
     pub observed_targets: &'a [RawTarget],
     pub sections: &'a [LinkSection],
-    /// Remaining follow links, content first. Jev pages these across requests.
+    /// Remaining follow links, content first. System One pages these across requests.
     pub follow_targets: &'a [RawTarget],
     pub step: usize,
     pub max_steps: usize,
@@ -107,14 +107,14 @@ pub struct StepCtx<'a> {
     pub max_pages: usize,
     /// True when the run carries any value to type.
     pub can_type: bool,
-    /// Names of the values available to type. Values never reach Jev.
+    /// Names of the values available to type. Values never reach System One.
     pub input_names: &'a [String],
     pub last_act: Option<CrawlAct>,
     /// True when `get_links` already ran on this URL. Do not collect again.
     pub has_link_inventory: bool,
     pub path: &'a [PathHop],
     pub tried_here: &'a [TriedHop],
-    /// Pages already kept. Jev uses this to count results.
+    /// Pages already kept. System One uses this to count results.
     pub kept: &'a [PathHop],
     /// Every follow already opened, from every page.
     pub opened: &'a [TriedHop],
@@ -123,7 +123,7 @@ pub struct StepCtx<'a> {
     pub new_targets_since_scroll: u32,
 }
 
-/// Ask Jev. `Err` on timeout, HTTP failure, or a missing act.
+/// Ask System One. `Err` on timeout, HTTP failure, or a missing act.
 pub async fn judge_step(
     http: &HttpClient,
     credentials: &ProviderCredentials,
@@ -138,7 +138,7 @@ pub async fn judge_step(
             section_key: None,
             input_name: None,
             need_extract: false,
-            via_jev: true,
+            via_system_one: true,
         });
     }
     let act = ask_act(http, credentials, ctx, &state).await?;
@@ -160,7 +160,7 @@ pub async fn judge_step(
                 .and_then(|t| t.href.as_deref())
                 && tried_count(Some(href), ctx.tried_here) > 0
             {
-                return Err(format!("jev follow already tried from here: {href}"));
+                return Err(format!("system_one follow already tried from here: {href}"));
             }
             Ok(StepDecision {
                 keep: true,
@@ -171,7 +171,7 @@ pub async fn judge_step(
                     .and_then(|id| section_key_for(id, ctx.sections)),
                 input_name: None,
                 need_extract: false,
-                via_jev: true,
+                via_system_one: true,
             })
         }
         CrawlAct::Click | CrawlAct::Type => {
@@ -191,7 +191,7 @@ pub async fn judge_step(
                 section_key: None,
                 input_name,
                 need_extract: false,
-                via_jev: true,
+                via_system_one: true,
             })
         }
         other => Ok(StepDecision {
@@ -201,14 +201,14 @@ pub async fn judge_step(
             section_key: None,
             input_name: None,
             need_extract: false,
-            via_jev: true,
+            via_system_one: true,
         }),
     }
 }
 
-/// Ask which named value belongs in the field Jev just chose.
+/// Ask which named value belongs in the field System One just chose.
 ///
-/// Jev sees names only. The values stay in the crawl config.
+/// System One sees names only. The values stay in the crawl config.
 async fn ask_input(
     http: &HttpClient,
     credentials: &ProviderCredentials,
@@ -234,7 +234,7 @@ async fn ask_input(
         .find(|name| *name == &raw)
         .cloned()
         .map(Some)
-        .ok_or_else(|| format!("jev input not offered: {raw}"))
+        .ok_or_else(|| format!("system_one input not offered: {raw}"))
 }
 
 fn step_state(ctx: &StepCtx<'_>) -> Value {
@@ -255,11 +255,11 @@ fn step_state(ctx: &StepCtx<'_>) -> Value {
             "url": hop.url,
             "title": hop.title,
         })).collect::<Vec<_>>(),
-        "kept": ctx.kept.iter().take(JEV_BATCH_CAP).map(|hop| json!({
+        "kept": ctx.kept.iter().take(SYSTEM_ONE_BATCH_CAP).map(|hop| json!({
             "url": hop.url,
             "title": clip_chars(&hop.title, TITLE_CLIP),
         })).collect::<Vec<_>>(),
-        "opened": ctx.opened.iter().take(JEV_BATCH_CAP).map(|hop| json!({
+        "opened": ctx.opened.iter().take(SYSTEM_ONE_BATCH_CAP).map(|hop| json!({
             "href": hop.href,
             "landed_title": clip_chars(&hop.landed_title, TITLE_CLIP),
         })).collect::<Vec<_>>(),
@@ -314,7 +314,7 @@ fn parse_done(raw: &str) -> Result<bool, String> {
     match raw {
         "yes" => Ok(true),
         "no" => Ok(false),
-        other => Err(format!("jev done not offered: {other}")),
+        other => Err(format!("system_one done not offered: {other}")),
     }
 }
 
@@ -378,14 +378,14 @@ async fn ask_act(
         }
     }
     let raw = ask_choice(http, credentials, state, "act", act).await?;
-    // Jev output is untrusted. An act outside the menu has no valid dispatch.
+    // System One output is untrusted. An act outside the menu has no valid dispatch.
     if !offered.contains(&raw.as_str()) {
-        return Err(format!("jev act not offered: {raw}"));
+        return Err(format!("system_one act not offered: {raw}"));
     }
-    CrawlAct::parse(&raw).ok_or_else(|| format!("jev act unknown: {raw}"))
+    CrawlAct::parse(&raw).ok_or_else(|| format!("system_one act unknown: {raw}"))
 }
 
-/// Jev types values it never sees, so the guide names the fields, not the text.
+/// System One types values it never sees, so the guide names the fields, not the text.
 fn type_note(ctx: &StepCtx<'_>) -> String {
     if ctx.input_names.is_empty() {
         return String::new();
@@ -401,7 +401,7 @@ fn follow_batch_count(len: usize) -> usize {
     if len == 0 {
         return 0;
     }
-    len.div_ceil(JEV_BATCH_CAP)
+    len.div_ceil(SYSTEM_ONE_BATCH_CAP)
 }
 
 async fn ask_sliced_targets<'a>(
@@ -411,11 +411,11 @@ async fn ask_sliced_targets<'a>(
     targets: &'a [RawTarget],
 ) -> Result<&'a [RawTarget], String> {
     if targets.is_empty() {
-        return Err("jev needs targets, none available".into());
+        return Err("system_one needs targets, none available".into());
     }
     let mut cur = targets;
-    while cur.len() > JEV_BATCH_CAP {
-        let batches: Vec<&[RawTarget]> = cur.chunks(JEV_BATCH_CAP).collect();
+    while cur.len() > SYSTEM_ONE_BATCH_CAP {
+        let batches: Vec<&[RawTarget]> = cur.chunks(SYSTEM_ONE_BATCH_CAP).collect();
         cur = ask_target_batch(http, credentials, state, &batches).await?;
     }
     Ok(cur)
@@ -428,9 +428,9 @@ async fn ask_target_batch<'a>(
     batches: &[&'a [RawTarget]],
 ) -> Result<&'a [RawTarget], String> {
     if batches.is_empty() {
-        return Err("jev batch needs slices, none available".into());
+        return Err("system_one batch needs slices, none available".into());
     }
-    let window = if batches.len() > JEV_BATCH_CAP {
+    let window = if batches.len() > SYSTEM_ONE_BATCH_CAP {
         ask_batch_window(http, credentials, state, batches).await?
     } else {
         batches
@@ -453,8 +453,8 @@ async fn ask_batch_window<'a, 'b>(
          Read the sample names. Pick the group that contains the target you need.",
     );
     for index in 0..window_count {
-        let start = index * JEV_BATCH_CAP;
-        let end = (start + JEV_BATCH_CAP).min(batches.len());
+        let start = index * SYSTEM_ONE_BATCH_CAP;
+        let end = (start + SYSTEM_ONE_BATCH_CAP).min(batches.len());
         let window = &batches[start..end];
         let first = window
             .first()
@@ -482,12 +482,12 @@ async fn ask_batch_window<'a, 'b>(
         );
     }
     let raw = ask_choice(http, credentials, state, "batch_group", question).await?;
-    let index = resolve_index(&raw).ok_or_else(|| format!("jev batch group unknown: {raw}"))?;
-    let start = index.saturating_mul(JEV_BATCH_CAP);
+    let index = resolve_index(&raw).ok_or_else(|| format!("system_one batch group unknown: {raw}"))?;
+    let start = index.saturating_mul(SYSTEM_ONE_BATCH_CAP);
     if start >= batches.len() {
-        return Err(format!("jev batch group unknown: {raw}"));
+        return Err(format!("system_one batch group unknown: {raw}"));
     }
-    let end = (start + JEV_BATCH_CAP).min(batches.len());
+    let end = (start + SYSTEM_ONE_BATCH_CAP).min(batches.len());
     Ok(&batches[start..end])
 }
 
@@ -510,7 +510,7 @@ async fn ask_which_target_batch<'a>(
         );
     }
     let raw = ask_choice(http, credentials, state, "batch", question).await?;
-    resolve_batch(&raw, batches).ok_or_else(|| format!("jev batch unknown: {raw}"))
+    resolve_batch(&raw, batches).ok_or_else(|| format!("system_one batch unknown: {raw}"))
 }
 
 async fn ask_sliced_names<'a>(
@@ -520,11 +520,11 @@ async fn ask_sliced_names<'a>(
     names: &'a [String],
 ) -> Result<&'a [String], String> {
     if names.is_empty() {
-        return Err("jev input needs names, none available".into());
+        return Err("system_one input needs names, none available".into());
     }
     let mut cur = names;
-    while cur.len() > JEV_BATCH_CAP {
-        let batches: Vec<&[String]> = cur.chunks(JEV_BATCH_CAP).collect();
+    while cur.len() > SYSTEM_ONE_BATCH_CAP {
+        let batches: Vec<&[String]> = cur.chunks(SYSTEM_ONE_BATCH_CAP).collect();
         cur = ask_name_batch(http, credentials, state, &batches).await?;
     }
     Ok(cur)
@@ -561,7 +561,7 @@ async fn ask_name_batch<'a>(
         );
     }
     let raw = ask_choice(http, credentials, state, "input_batch", question).await?;
-    resolve_name_batch(&raw, batches).ok_or_else(|| format!("jev input batch unknown: {raw}"))
+    resolve_name_batch(&raw, batches).ok_or_else(|| format!("system_one input batch unknown: {raw}"))
 }
 
 fn resolve_name_batch<'a>(raw: &str, batches: &[&'a [String]]) -> Option<&'a [String]> {
@@ -708,19 +708,19 @@ async fn ask_choice(
     questions.insert(id, question);
     let request = SystemOneRequest::new(state.clone(), questions).with_model("typesafe:jev-latest");
     let work = system_one(http, credentials, request);
-    let response = match tokio::time::timeout(JEV_TIMEOUT, work).await {
+    let response = match tokio::time::timeout(SYSTEM_ONE_TIMEOUT, work).await {
         Ok(Ok(response)) => response,
         Ok(Err(err)) => return Err(format!("system_one: {err}")),
         Err(_) => return Err("system_one timed out".into()),
     };
     response
         .answer(id)
-        .and_then(|a| choice_if_confident(a, JEV_MIN_CONFIDENCE).or_else(|| a.choice()))
+        .and_then(|a| choice_if_confident(a, SYSTEM_ONE_MIN_CONFIDENCE).or_else(|| a.choice()))
         .map(str::to_string)
-        .ok_or_else(|| format!("jev {id} missing"))
+        .ok_or_else(|| format!("system_one {id} missing"))
 }
 
-/// Teach the browser, not a rule list. Jev sees this on every act question.
+/// Teach the browser, not a rule list. System One sees this on every act question.
 fn act_instructions(ctx: &StepCtx<'_>) -> String {
     let mut guide = String::from(
         "You drive a real web browser to finish the goal. Pick the next action.\n\
@@ -849,13 +849,13 @@ fn fallback_target(act: CrawlAct, targets: &[RawTarget]) -> Result<Option<String
     match picked {
         Some(t) => Ok(Some(t.id.clone())),
         None => Err(format!(
-            "jev {act} needs a target, none available",
+            "system_one {act} needs a target, none available",
             act = act.as_str()
         )),
     }
 }
 
-fn jev_unavailable_stop() -> StepDecision {
+fn system_one_unavailable_stop() -> StepDecision {
     StepDecision {
         keep: false,
         act: CrawlAct::Stop,
@@ -863,27 +863,27 @@ fn jev_unavailable_stop() -> StepDecision {
         section_key: None,
         input_name: None,
         need_extract: false,
-        via_jev: false,
+        via_system_one: false,
     }
 }
 
-/// Ask Jev for the step. Stop when credentials are missing or Jev does not answer.
+/// Ask System One for the step. Stop when credentials are missing or System One does not answer.
 pub async fn decide_step(
     http: &HttpClient,
     credentials: Option<&ProviderCredentials>,
     ctx: &StepCtx<'_>,
 ) -> Result<StepDecision, CharlotteError> {
     let Some(creds) = credentials else {
-        return Ok(jev_unavailable_stop());
+        return Ok(system_one_unavailable_stop());
     };
-    for _ in 1..=JEV_RETRIES {
+    for _ in 1..=SYSTEM_ONE_RETRIES {
         match judge_step(http, creds, ctx).await {
             Ok(decision) => return Ok(decision),
             Err(_) => {}
         }
     }
-    tracing::warn!(target: "charlotte::agentic_crawl", "Jev unavailable");
-    Ok(jev_unavailable_stop())
+    tracing::warn!(target: "charlotte::agentic_crawl", "System One unavailable");
+    Ok(system_one_unavailable_stop())
 }
 
 #[cfg(test)]
@@ -944,7 +944,7 @@ mod tests {
         let ctx = sample_ctx(&page, &targets, &[]);
         let d = decide_step(&http, None, &ctx).await.expect("decide");
         assert_eq!(d.act, CrawlAct::Stop);
-        assert!(!d.via_jev);
+        assert!(!d.via_system_one);
         assert!(!d.keep);
     }
 
@@ -1100,7 +1100,7 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        let batches: Vec<&[RawTarget]> = targets.chunks(JEV_BATCH_CAP).collect();
+        let batches: Vec<&[RawTarget]> = targets.chunks(SYSTEM_ONE_BATCH_CAP).collect();
         assert_eq!(follow_batch_count(targets.len()), 3);
         assert_eq!(batches.len(), 3);
         assert_eq!(batches[0].len(), 40);
@@ -1123,7 +1123,7 @@ mod tests {
     #[test]
     fn name_batches_split_the_same_way() {
         let names: Vec<String> = (1..=85).map(|i| format!("field_{i}")).collect();
-        let batches: Vec<&[String]> = names.chunks(JEV_BATCH_CAP).collect();
+        let batches: Vec<&[String]> = names.chunks(SYSTEM_ONE_BATCH_CAP).collect();
         assert_eq!(batches.len(), 3);
         assert_eq!(
             resolve_name_batch("b02", &batches)

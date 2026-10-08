@@ -110,6 +110,6 @@ async fn brief_gate_uses_system_one_when_typesafe_present() {
     .await
     .expect("gate");
     assert!(!decision.expand);
-    assert!(decision.via_jev);
+    assert!(decision.via_system_one);
     assert_eq!(decision.shape.map(|s| s.as_str()), Some("open-web"));
 }

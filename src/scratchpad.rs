@@ -47,7 +47,7 @@ pub fn charlotte_offload_config() -> notepad::OffloadConfig {
             .push("site_crawl_chunks".to_string());
     }
     // Crawl control (stopped_reason, trace, acts) must stay inline.
-    // Offloading replaces it with Wikipedia chrome and hides why Jev stopped.
+    // Offloading replaces it with Wikipedia chrome and hides why System One stopped.
     cfg.always_offload_tools
         .retain(|name| name != "agentic_crawl");
     if !cfg
@@ -152,7 +152,7 @@ mod tests {
     fn agentic_crawl_result_stays_inline() {
         let cfg = charlotte_offload_config();
         let hook = OffloadHook::new(new_notepad(), cfg);
-        let body = r#"{"ok":true,"stopped_reason":"jev_stop","trace":[{"act":"follow"}],"pages":[{"url":"https://en.wikipedia.org/wiki/Sun","title":"Sun","excerpt":"Jump to content"}]}"#;
+        let body = r#"{"ok":true,"stopped_reason":"system_one_stop","trace":[{"act":"follow"}],"pages":[{"url":"https://en.wikipedia.org/wiki/Sun","title":"Sun","excerpt":"Jump to content"}]}"#;
         assert!(
             !hook.should_offload("agentic_crawl", body, None),
             "agentic_crawl envelope must stay inline"

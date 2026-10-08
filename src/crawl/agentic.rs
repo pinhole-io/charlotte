@@ -1,10 +1,10 @@
-//! Jev-guided crawl on a [`PageActor`].
+//! System One–guided crawl on a [`PageActor`].
 //!
 //! Default actor is the headed [`crate::BrowserHandle`]. The uv sidecar is opt-in.
-//! Jev picks keep / act / target / extract. Chat runs only when Jev asks.
+//! System One picks keep / act / target / extract. Chat runs only when System One asks.
 
 mod handle_actor;
-mod jev;
+mod system_one;
 mod sidecar;
 mod targets;
 
@@ -31,21 +31,21 @@ pub use handle_actor::HandlePageActor;
 pub use sidecar::{PageActor, ScriptedPageActor, UvSidecar};
 pub use targets::{
     ObservePage, RawTarget, canonical_page_url, clip_chars, page_matches_goal, same_document,
-    select_jev_targets,
+    select_crawl_targets,
 };
 
-use jev::{CrawlAct, PathHop, StepCtx, TriedHop, decide_step};
+use system_one::{CrawlAct, PathHop, StepCtx, TriedHop, decide_step};
 use targets::{filter_follow_candidates, follow_menu, group_link_sections, without_tried_follows};
 
-/// Window scroll distance for Jev `scroll_down` / `scroll_up`.
+/// Window scroll distance for System One `scroll_down` / `scroll_up`.
 const SCROLL_DELTA: i32 = 600;
-/// Path hops kept in Jev state.
+/// Path hops kept in System One state.
 const PATH_KEEP: usize = 20;
 
 /// Page body kept in the tool result. Long Wikipedia text must not bury the trace.
 const PAGE_RESULT_CLIP: usize = 400;
 
-/// Practical "no limit" for Jev steps and kept pages. The chat model must not lower this.
+/// Practical "no limit" for System One steps and kept pages. The chat model must not lower this.
 pub const AGENTIC_CRAWL_NO_LIMIT: usize = 9_999_999;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -58,8 +58,8 @@ struct ActionStateKey {
 
 /// One value the crawl may type into a field.
 ///
-/// Jev chooses an input by `name`. Hosts must resolve secret values after the
-/// outer model creates the tool call. The value never enters Jev or a tool result.
+/// System One chooses an input by `name`. Hosts must resolve secret values after the
+/// outer model creates the tool call. The value never enters System One or a tool result.
 pub struct CrawlInput {
     pub name: String,
     value: SecretString,
@@ -114,7 +114,7 @@ pub struct AgenticCrawlConfig {
     pub url_policy: UrlPolicy,
     pub delay_between_steps: Duration,
     /// When false, ignore `TYPESAFE_API_KEY` from the process environment (tests).
-    pub use_env_jev: bool,
+    pub use_env_system_one: bool,
 }
 
 impl AgenticCrawlConfig {
@@ -133,11 +133,11 @@ impl AgenticCrawlConfig {
             respect_robots: false,
             url_policy: UrlPolicy::permissive(),
             delay_between_steps: Duration::ZERO,
-            use_env_jev: true,
+            use_env_system_one: true,
         }
     }
 
-    /// Names Jev may choose between when it types. Empty means one value or none.
+    /// Names System One may choose between when it types. Empty means one value or none.
     #[must_use]
     pub fn input_names(&self) -> Vec<String> {
         self.inputs.iter().map(|i| i.name.clone()).collect()
@@ -149,7 +149,7 @@ impl AgenticCrawlConfig {
         !self.inputs.is_empty() || self.input_text.is_some()
     }
 
-    /// The text for Jev's chosen input name, or the single unnamed value.
+    /// The text for System One's chosen input name, or the single unnamed value.
     fn input_value(&self, name: Option<&str>) -> Option<&str> {
         if let Some(name) = name
             && let Some(found) = self.inputs.iter().find(|i| i.name == name)
@@ -163,7 +163,7 @@ impl AgenticCrawlConfig {
     }
 }
 
-/// Chat client used only when Jev sets `need_extract`.
+/// Chat client used only when System One sets `need_extract`.
 #[derive(Clone)]
 pub struct AgenticLlm {
     pub http: HttpClient,
@@ -172,7 +172,7 @@ pub struct AgenticLlm {
     pub options: ChatOptions,
 }
 
-/// Run a bounded Jev-guided crawl on `actor`.
+/// Run a bounded System One–guided crawl on `actor`.
 pub async fn agentic_crawl(
     actor: &mut dyn PageActor,
     config: &AgenticCrawlConfig,
@@ -207,7 +207,7 @@ pub async fn agentic_crawl(
     }
     redact_credential_values(config, &mut page);
 
-    let creds = typesafe_credentials(llm.map(|l| &l.options), config.use_env_jev);
+    let creds = typesafe_credentials(llm.map(|l| &l.options), config.use_env_system_one);
     let input_names = config.input_names();
     let mut visited = HashSet::new();
     visited.insert(page.url.clone());
@@ -229,7 +229,7 @@ pub async fn agentic_crawl(
     let mut trace = Vec::new();
     let mut pages_kept = 0usize;
     let mut last_act = None;
-    let mut jev_steps = 0u32;
+    let mut system_one_steps = 0u32;
     let mut heuristic_steps = 0u32;
     let mut extracts = 0u32;
     let mut stopped_reason = "max_steps".to_string();
@@ -256,14 +256,14 @@ pub async fn agentic_crawl(
                     "target": Value::Null,
                     "keep": true,
                     "need_extract": false,
-                    "via_jev": false,
+                    "via_system_one": false,
                     "goal_reached": true,
                 }));
                 stopped_reason = "goal_reached".into();
                 break;
             }
             return Err(CharlotteError::msg(
-                "Jev credentials missing. Set TYPESAFE_API_KEY so agentic_crawl can pick actions.",
+                "System One credentials missing. Set TYPESAFE_API_KEY so agentic_crawl can pick actions.",
             ));
         }
         let page_url = if page.url.trim().is_empty() {
@@ -277,7 +277,7 @@ pub async fn agentic_crawl(
             .get(&page_key)
             .map(Vec::as_slice)
             .unwrap_or(page.targets.as_slice());
-        let observed = select_jev_targets(
+        let observed = select_crawl_targets(
             &page.targets,
             &config.goal,
             &config.url_policy,
@@ -330,12 +330,12 @@ pub async fn agentic_crawl(
             new_targets_since_scroll,
         };
         let decision = decide_step(http, creds.as_ref(), &ctx).await?;
-        if decision.via_jev {
-            jev_steps += 1;
+        if decision.via_system_one {
+            system_one_steps += 1;
         } else {
             heuristic_steps += 1;
         }
-        let source = if decision.via_jev { "jev" } else { "no_jev" };
+        let source = if decision.via_system_one { "system_one" } else { "no_system_one" };
         tracing::info!(
             target: "charlotte::agentic_crawl",
             step,
@@ -357,7 +357,7 @@ pub async fn agentic_crawl(
                 "target": decision.target_id,
                 "keep": decision.keep,
                 "need_extract": decision.need_extract,
-                "via_jev": decision.via_jev,
+                "via_system_one": decision.via_system_one,
                 "blocked": "repeated_action",
             }));
             stopped_reason = "repeated_action".into();
@@ -398,7 +398,7 @@ pub async fn agentic_crawl(
             "target": decision.target_id,
             "keep": decision.keep,
             "need_extract": decision.need_extract,
-            "via_jev": decision.via_jev,
+            "via_system_one": decision.via_system_one,
         }));
 
         if pages_kept >= config.max_pages {
@@ -406,10 +406,10 @@ pub async fn agentic_crawl(
             break;
         }
         if decision.act == CrawlAct::Stop {
-            stopped_reason = if decision.via_jev {
-                "jev_stop".into()
+            stopped_reason = if decision.via_system_one {
+                "system_one_stop".into()
             } else {
-                "jev_unavailable".into()
+                "system_one_unavailable".into()
             };
             break;
         }
@@ -529,7 +529,7 @@ pub async fn agentic_crawl(
         "pages": kept_pages,
         "trace": trace,
         "stopped_reason": stopped_reason,
-        "via_jev": { "steps": jev_steps, "heuristic_steps": heuristic_steps, "extracts": extracts },
+        "via_system_one": { "steps": system_one_steps, "heuristic_steps": heuristic_steps, "extracts": extracts },
         "pages_kept": pages_kept,
         "visited_count": visited.len(),
     }))
@@ -554,7 +554,7 @@ fn count_new_hrefs(seen: &mut HashSet<String>, targets: &[RawTarget]) -> u32 {
     added
 }
 
-fn action_state_key(page: &ObservePage, decision: &jev::StepDecision) -> ActionStateKey {
+fn action_state_key(page: &ObservePage, decision: &system_one::StepDecision) -> ActionStateKey {
     let mut hasher = DefaultHasher::new();
     canonical_page_url(&page.url).hash(&mut hasher);
     page.title.hash(&mut hasher);
@@ -653,7 +653,7 @@ fn kept_page_row(page: &ObservePage) -> Value {
 
 async fn dispatch_act(
     actor: &mut dyn PageActor,
-    decision: &jev::StepDecision,
+    decision: &system_one::StepDecision,
     config: &AgenticCrawlConfig,
     targets: &[RawTarget],
     robots: &Option<RobotsFetcher>,
@@ -781,7 +781,7 @@ fn credential_origin_left_result() -> Value {
         "pages": [],
         "trace": [],
         "stopped_reason": "credential_origin_left",
-        "via_jev": { "steps": 0, "heuristic_steps": 0, "extracts": 0 },
+        "via_system_one": { "steps": 0, "heuristic_steps": 0, "extracts": 0 },
         "pages_kept": 0,
         "visited_count": 0,
     })
@@ -900,7 +900,7 @@ pub fn agentic_crawl_sidecar_enabled() -> bool {
 
 #[cfg(test)]
 mod credential_tests {
-    use super::jev::{CrawlAct, StepDecision};
+    use super::system_one::{CrawlAct, StepDecision};
     use super::*;
 
     fn input_target(kind: &str) -> RawTarget {
@@ -940,7 +940,7 @@ mod credential_tests {
             section_key: None,
             input_name: Some("password".to_string()),
             need_extract: false,
-            via_jev: true,
+            via_system_one: true,
         }
     }
 
