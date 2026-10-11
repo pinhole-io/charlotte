@@ -25,7 +25,7 @@
 //! Optional: `--browsers N` or `--browsers auto` (CPU-based default), `--stealth` for best-effort
 //! automation mitigation. The agent still uses a single shared tab on the first browser instance.
 //!
-//! Brief expansion is routed by `CHARLOTTE_BRIEF_MODE` (default: `llm`; fallback to heuristic on gate errors).
+//! Brief expansion is routed by `CHARLOTTE_BRIEF_MODE` (default: `llm`).
 
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -174,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &base_opts,
             &prompt,
         )
-        .await;
+        .await?;
         eprintln!(
             "brief_mode={} ({gate_source})",
             if should_expand { "expanded" } else { "direct" }
@@ -302,19 +302,19 @@ async fn should_expand_brief_auto(
     guardrails: &GuardrailRegistry,
     base_opts: &ChatOptions,
     user_text: &str,
-) -> (bool, &'static str, Option<charlotte::BriefTaskShape>) {
+) -> Result<(bool, &'static str, Option<charlotte::BriefTaskShape>), charlotte::CharlotteError> {
     match mode {
-        BriefMode::Always => (true, "always", None),
-        BriefMode::Never => (false, "never", None),
-        BriefMode::Heuristic => (should_expand_brief(user_text), "heuristic", None),
+        BriefMode::Always => Ok((true, "always", None)),
+        BriefMode::Never => Ok((false, "never", None)),
+        BriefMode::Heuristic => Ok((should_expand_brief(user_text), "heuristic", None)),
         BriefMode::Llm => {
-            match judge_brief_gate(http, hooks, guardrails, base_opts, user_text).await {
-                Ok(decision) => {
-                    let source = if decision.via_system_one { "system_one" } else { "llm" };
-                    (decision.expand, source, decision.shape)
-                }
-                Err(_) => (should_expand_brief(user_text), "llm->heuristic", None),
-            }
+            let decision = judge_brief_gate(http, hooks, guardrails, base_opts, user_text).await?;
+            let source = if decision.via_system_one {
+                "system_one"
+            } else {
+                "llm"
+            };
+            Ok((decision.expand, source, decision.shape))
         }
     }
 }
@@ -370,7 +370,7 @@ async fn run_interactive(
         }
 
         let (should_expand, gate_source, brief_shape) =
-            should_expand_brief_auto(brief_mode, http, hooks, guardrails, base_opts, line).await;
+            should_expand_brief_auto(brief_mode, http, hooks, guardrails, base_opts, line).await?;
         eprintln!(
             "brief_mode={} ({gate_source})",
             if should_expand { "expanded" } else { "direct" }

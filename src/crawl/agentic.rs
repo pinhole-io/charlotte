@@ -4,8 +4,8 @@
 //! System One picks keep / act / target / extract. Chat runs only when System One asks.
 
 mod handle_actor;
-mod system_one;
 mod sidecar;
+mod system_one;
 mod targets;
 
 use std::collections::{HashMap, HashSet};
@@ -335,7 +335,11 @@ pub async fn agentic_crawl(
         } else {
             heuristic_steps += 1;
         }
-        let source = if decision.via_system_one { "system_one" } else { "no_system_one" };
+        let source = if decision.via_system_one {
+            "system_one"
+        } else {
+            "no_system_one"
+        };
         tracing::info!(
             target: "charlotte::agentic_crawl",
             step,

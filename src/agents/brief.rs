@@ -10,9 +10,7 @@ use superglue::hooks::HookRegistry;
 use superglue::http::HttpClient;
 use superglue::openai::ChatMessage;
 use superglue::providers::{ProviderCredentials, ProviderId};
-use superglue::systemone::{
-    Choice, Questions, SystemOneRequest, choice_if_confident, clip_state, system_one,
-};
+use superglue::systemone::{Choice, Questions, SystemOneRequest, clip_state, system_one};
 use superglue::tools::ToolRegistry;
 
 use crate::CharlotteError;
@@ -58,7 +56,6 @@ pub enum BriefMode {
 }
 
 const BRIEF_SYSTEM_ONE_TIMEOUT: Duration = Duration::from_millis(400);
-const BRIEF_CHOICE_MIN_CONFIDENCE: f64 = 0.6;
 
 /// Closed task shape for brief process hints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,56 +171,15 @@ pub fn brief_search_context(config: &SearchConfig) -> String {
     }
 }
 
-/// Task-shaped process hints for the brief expander (adapt to the user query; not hard constraints).
+/// Process hints for one System One task shape.
 #[must_use]
-pub fn brief_task_process_hints(user_query: &str, config: &SearchConfig) -> String {
-    brief_task_process_hints_shaped(user_query, config, None)
-}
-
-/// Process hints with an optional closed shape from System One.
-#[must_use]
-pub fn brief_task_process_hints_shaped(
-    user_query: &str,
-    config: &SearchConfig,
-    shape: Option<BriefTaskShape>,
-) -> String {
-    let q = user_query.trim();
-    let lower = q.to_ascii_lowercase();
-    let mentions_domain = match shape {
-        Some(BriefTaskShape::OpenWeb) => false,
-        Some(_) => false,
-        None => query_mentions_domain(&lower),
-    };
-    let is_comparison = match shape {
-        Some(BriefTaskShape::Compare) => true,
-        Some(_) => false,
-        None => ["compare", "versus", " vs ", "across", "difference between"]
-            .iter()
-            .any(|m| lower.contains(m)),
-    };
-    let is_crawl = match shape {
-        Some(BriefTaskShape::Crawl) => true,
-        Some(_) => false,
-        None => ["crawl", "documentation", "docs site", "site map", "sitemap"]
-            .iter()
-            .any(|m| lower.contains(m)),
-    };
-    let is_listing = match shape {
-        Some(BriefTaskShape::Listing) => true,
-        Some(BriefTaskShape::OpenWeb) => false,
-        Some(_) => false,
-        None => ["list ", "find all", "enumerate", "every ", "all official"]
-            .iter()
-            .any(|m| lower.contains(m)),
-    };
-
+pub fn brief_task_process_hints(shape: BriefTaskShape, config: &SearchConfig) -> String {
     let search_note = match config.backend {
         SearchBackendKind::Searxng => "Use plain-keyword web_search only (no site:).",
         SearchBackendKind::Browser => "web_search may use site:example.com with root domain only.",
     };
-
-    if is_crawl {
-        return format!(
+    match shape {
+        BriefTaskShape::Crawl => format!(
             "Task shape: **site crawl / docs coverage**.\n\
              Suggested Process skeleton:\n\
              1. Confirm seed URL(s) from the user task.\n\
@@ -231,11 +187,8 @@ pub fn brief_task_process_hints_shaped(
              3. `navigate` + `page_markdown` on highest-value pages; use `focus` for the topic.\n\
              4. One focused `web_search` only if crawl misses a section ({search_note}).\n\
              5. `notepad_store` distilled findings; answer with cited URLs."
-        );
-    }
-
-    if is_comparison {
-        return format!(
+        ),
+        BriefTaskShape::Compare => format!(
             "Task shape: **comparison across entities**.\n\
              Suggested Process skeleton:\n\
              1. List entities from the user task.\n\
@@ -243,11 +196,8 @@ pub fn brief_task_process_hints_shaped(
              3. `page_markdown` with `focus` on comparison-relevant facts.\n\
              4. `notepad_store` per entity before synthesizing.\n\
              5. Final answer structured per user format; cite URLs from tool output."
-        );
-    }
-
-    if mentions_domain || is_listing {
-        return format!(
+        ),
+        BriefTaskShape::Listing => format!(
             "Task shape: **on-site + targeted discovery** (domain or listing in query).\n\
              Suggested Process skeleton:\n\
              1. `navigate` to the site root or page the user named.\n\
@@ -256,25 +206,25 @@ pub fn brief_task_process_hints_shaped(
              4. `navigate` to 1–2 best same-origin candidates; `page_markdown` again.\n\
              5. If still thin: one `web_search` with plain keywords ({search_note}) — not parallel variants.\n\
              6. `notepad_read` any stubs; `notepad_store` verified facts; answer only from tool output with URLs."
-        );
+        ),
+        BriefTaskShape::OpenWeb => format!(
+            "Task shape: **open-web research**.\n\
+             Suggested Process skeleton:\n\
+             1. One focused `web_search` with keywords from the user task ({search_note}).\n\
+             2. If snippets are insufficient, `scrape_many` on the 1–3 most authoritative URLs from results (parallel); otherwise answer from snippets.\n\
+             3. If gap remains: one different `web_search` query (do not repeat the first).\n\
+             4. `notepad_store` key facts; final answer cites URLs from tool output."
+        ),
     }
-
-    format!(
-        "Task shape: **open-web research**.\n\
-         Suggested Process skeleton:\n\
-         1. One focused `web_search` with keywords from the user task ({search_note}).\n\
-         2. If snippets are insufficient, `scrape_many` on the 1–3 most authoritative URLs from results (parallel); otherwise answer from snippets.\n\
-         3. If gap remains: one different `web_search` query (do not repeat the first).\n\
-         4. `notepad_store` key facts; final answer cites URLs from tool output."
-    )
 }
 
-fn query_mentions_domain(lower: &str) -> bool {
-    [
-        ".com", ".org", ".net", ".io", ".gov", ".edu", ".co/", "www.",
-    ]
-    .iter()
-    .any(|tld| lower.contains(tld))
+/// Process hints for a System One shape. Missing shape uses the open-web skeleton.
+#[must_use]
+pub fn brief_task_process_hints_shaped(
+    config: &SearchConfig,
+    shape: Option<BriefTaskShape>,
+) -> String {
+    brief_task_process_hints(shape.unwrap_or(BriefTaskShape::OpenWeb), config)
 }
 
 fn brief_expander_user_message(
@@ -292,7 +242,7 @@ fn brief_expander_user_message(
          {}",
         utc_now_context_line(),
         brief_search_context(search_config),
-        brief_task_process_hints_shaped(user_query, search_config, shape),
+        brief_task_process_hints_shaped(search_config, shape),
         user_query.trim()
     )
 }
@@ -381,7 +331,7 @@ pub async fn should_expand_brief_llm(
     )
 }
 
-/// Brief gate with optional System One task shape. TypeSafe Choice when credentials exist.
+/// Brief gate. TypeSafe System One returns the gate and the task shape.
 pub async fn judge_brief_gate(
     http: &HttpClient,
     hooks: &HookRegistry,
@@ -390,16 +340,7 @@ pub async fn judge_brief_gate(
     user_text: &str,
 ) -> Result<BriefGateDecision, CharlotteError> {
     if let Some(creds) = typesafe_credentials(base_options) {
-        match judge_brief_system_one(http, &creds, user_text).await {
-            Some(decision) => return Ok(decision),
-            None => {
-                return Ok(BriefGateDecision {
-                    expand: should_expand_brief(user_text),
-                    shape: None,
-                    via_system_one: false,
-                });
-            }
-        }
+        return judge_brief_system_one(http, &creds, user_text).await;
     }
 
     let registry = ToolRegistry::new();
@@ -448,7 +389,7 @@ async fn judge_brief_system_one(
     http: &HttpClient,
     credentials: &ProviderCredentials,
     user_text: &str,
-) -> Option<BriefGateDecision> {
+) -> Result<BriefGateDecision, CharlotteError> {
     let mut questions = Questions::new();
     questions.insert(
         "gate",
@@ -475,22 +416,33 @@ async fn judge_brief_system_one(
     let work = system_one(http, credentials, request);
     let response = tokio::time::timeout(BRIEF_SYSTEM_ONE_TIMEOUT, work)
         .await
-        .ok()?
-        .ok()?;
-    let gate = response.answer("gate")?;
-    let choice = choice_if_confident(gate, BRIEF_CHOICE_MIN_CONFIDENCE)?;
-    let expand = match choice {
+        .map_err(|_| CharlotteError::msg("brief system one timed out"))?
+        .map_err(|err| CharlotteError::msg(err.to_string()))?;
+    let gate = response
+        .answer("gate")
+        .and_then(|answer| answer.choice())
+        .ok_or_else(|| CharlotteError::msg("brief system one omitted gate"))?;
+    let expand = match gate {
         "brief" => true,
         "direct" => false,
-        _ => return None,
+        other => {
+            return Err(CharlotteError::msg(format!(
+                "brief system one returned unknown gate: {other}"
+            )));
+        }
     };
-    let shape = response
+    let shape_raw = response
         .answer("shape")
-        .and_then(|answer| choice_if_confident(answer, BRIEF_CHOICE_MIN_CONFIDENCE))
-        .and_then(BriefTaskShape::parse);
-    Some(BriefGateDecision {
+        .and_then(|answer| answer.choice())
+        .ok_or_else(|| CharlotteError::msg("brief system one omitted shape"))?;
+    let shape = BriefTaskShape::parse(shape_raw).ok_or_else(|| {
+        CharlotteError::msg(format!(
+            "brief system one returned unknown shape: {shape_raw}"
+        ))
+    })?;
+    Ok(BriefGateDecision {
         expand,
-        shape,
+        shape: Some(shape),
         via_system_one: true,
     })
 }
@@ -583,28 +535,20 @@ mod tests {
         );
         assert!(msg.contains("## Search stack (active for this session)"));
         assert!(msg.contains("## Process patterns (adapt to user task)"));
-        assert!(msg.contains("on-site"));
+        assert!(msg.contains("open-web"));
         assert!(msg.contains("## User task"));
         assert!(msg.contains("find apple.com social accounts"));
     }
 
     #[test]
-    fn brief_task_process_hints_open_web_for_generic_query() {
-        let hints = brief_task_process_hints(
-            "what is the latest stable rust version",
-            &SearchConfig::default(),
-        );
-        assert!(hints.contains("open-web"));
-        assert!(hints.contains("scrape_many"));
-    }
-
-    #[test]
-    fn brief_task_process_hints_comparison() {
-        let hints = brief_task_process_hints(
-            "compare postgres vs mysql for analytics",
-            &SearchConfig::default(),
-        );
-        assert!(hints.contains("comparison"));
+    fn brief_task_process_hints_follow_the_system_one_shape() {
+        let open = brief_task_process_hints(BriefTaskShape::OpenWeb, &SearchConfig::default());
+        assert!(open.contains("open-web"));
+        assert!(open.contains("scrape_many"));
+        let compare = brief_task_process_hints(BriefTaskShape::Compare, &SearchConfig::default());
+        assert!(compare.contains("comparison"));
+        let missing = brief_task_process_hints_shaped(&SearchConfig::default(), None);
+        assert!(missing.contains("open-web"));
     }
 
     #[test]

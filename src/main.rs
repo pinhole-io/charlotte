@@ -158,19 +158,19 @@ async fn should_expand_brief_auto(
     guardrails: &GuardrailRegistry,
     base_opts: &ChatOptions,
     user_text: &str,
-) -> (bool, &'static str, Option<charlotte::BriefTaskShape>) {
+) -> anyhow::Result<(bool, &'static str, Option<charlotte::BriefTaskShape>)> {
     match mode {
-        BriefMode::Always => (true, "always", None),
-        BriefMode::Never => (false, "never", None),
-        BriefMode::Heuristic => (should_expand_brief(user_text), "heuristic", None),
+        BriefMode::Always => Ok((true, "always", None)),
+        BriefMode::Never => Ok((false, "never", None)),
+        BriefMode::Heuristic => Ok((should_expand_brief(user_text), "heuristic", None)),
         BriefMode::Llm => {
-            match judge_brief_gate(http, hooks, guardrails, base_opts, user_text).await {
-                Ok(decision) => {
-                    let source = if decision.via_system_one { "system_one" } else { "llm" };
-                    (decision.expand, source, decision.shape)
-                }
-                Err(_) => (should_expand_brief(user_text), "llm->heuristic", None),
-            }
+            let decision = judge_brief_gate(http, hooks, guardrails, base_opts, user_text).await?;
+            let source = if decision.via_system_one {
+                "system_one"
+            } else {
+                "llm"
+            };
+            Ok((decision.expand, source, decision.shape))
         }
     }
 }
@@ -278,7 +278,7 @@ async fn run_charlotte(
             base_opts,
             line,
         )
-        .await;
+        .await?;
         eprintln!(
             "brief_mode={} ({gate_source})",
             if should_expand { "expanded" } else { "direct" }

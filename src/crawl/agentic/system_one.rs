@@ -482,7 +482,8 @@ async fn ask_batch_window<'a, 'b>(
         );
     }
     let raw = ask_choice(http, credentials, state, "batch_group", question).await?;
-    let index = resolve_index(&raw).ok_or_else(|| format!("system_one batch group unknown: {raw}"))?;
+    let index =
+        resolve_index(&raw).ok_or_else(|| format!("system_one batch group unknown: {raw}"))?;
     let start = index.saturating_mul(SYSTEM_ONE_BATCH_CAP);
     if start >= batches.len() {
         return Err(format!("system_one batch group unknown: {raw}"));
@@ -561,7 +562,8 @@ async fn ask_name_batch<'a>(
         );
     }
     let raw = ask_choice(http, credentials, state, "input_batch", question).await?;
-    resolve_name_batch(&raw, batches).ok_or_else(|| format!("system_one input batch unknown: {raw}"))
+    resolve_name_batch(&raw, batches)
+        .ok_or_else(|| format!("system_one input batch unknown: {raw}"))
 }
 
 fn resolve_name_batch<'a>(raw: &str, batches: &[&'a [String]]) -> Option<&'a [String]> {
