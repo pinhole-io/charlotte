@@ -69,8 +69,14 @@ impl Tool for WebSearchTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(8)
             .clamp(1, self.max_results as u64) as usize;
-        dispatch_web_search(&self.http, &self.browser, &self.search, query, max_results)
-            .await
-            .map_err(tool_error)
+        dispatch_web_search(
+            &self.http,
+            Some(&self.browser),
+            &self.search,
+            query,
+            max_results,
+        )
+        .await
+        .map_err(tool_error)
     }
 }

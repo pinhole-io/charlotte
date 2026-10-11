@@ -96,16 +96,25 @@ impl Default for SearchConfig {
 }
 
 /// Dispatch `web_search` to SearXNG JSON API or the browser HTML scraper.
+///
+/// SearXNG ignores `browser`. The browser backend requires it.
 pub async fn web_search(
     http: &HttpClient,
-    browser: &BrowserHandle,
+    browser: Option<&BrowserHandle>,
     config: &SearchConfig,
     query: &str,
     max_results: usize,
 ) -> Result<Value, CharlotteError> {
     match config.backend {
         SearchBackendKind::Searxng => searxng_web_search(http, config, query, max_results).await,
-        SearchBackendKind::Browser => browser.web_search(query, max_results).await,
+        SearchBackendKind::Browser => {
+            let Some(browser) = browser else {
+                return Err(CharlotteError::msg(
+                    "browser search requires a browser handle",
+                ));
+            };
+            browser.web_search(query, max_results).await
+        }
     }
 }
 

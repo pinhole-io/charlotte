@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
+use charlotte::SearchBackendKind;
 use charlotte::search::{SearchConfig, web_search};
-use charlotte::{BrowserConfig, BrowserHandle, SearchBackendKind};
 use serde_json::json;
 use superglue::http::{ClientConfig, HttpClient};
 use wiremock::matchers::{method, path, query_param};
@@ -30,12 +30,9 @@ async fn web_search_searxng_maps_json_results() {
         .await;
 
     let http = HttpClient::new(ClientConfig::default()).expect("http client");
-    let browser = BrowserHandle::from_config(BrowserConfig::default())
-        .await
-        .expect("browser");
     let search_config = SearchConfig::new(SearchBackendKind::Searxng, mock.uri(), Duration::ZERO);
 
-    let out = web_search(&http, &browser, &search_config, "apple social", 8)
+    let out = web_search(&http, None, &search_config, "apple social", 8)
         .await
         .expect("web_search");
 
@@ -57,6 +54,4 @@ async fn web_search_searxng_maps_json_results() {
         results[0].get("snippet").and_then(|v| v.as_str()),
         Some("Official Apple site")
     );
-
-    browser.close().await.expect("close browser");
 }
