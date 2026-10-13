@@ -47,7 +47,7 @@ pub(crate) fn agentic_crawl_spec(
                 "input_text": { "type": "string", "maxLength": MAX_INPUT_CHARS, "description": "A single value to type when System One picks type (search box). Use `inputs` for a form with more than one field." },
                 "inputs": { "type": "object", "maxProperties": MAX_INPUTS, "description": "Named non-secret values System One may type. System One picks the field and the name. Use credential for passwords or other secrets.", "additionalProperties": { "type": "string", "maxLength": MAX_INPUT_CHARS } },
                 "credential": { "type": "string", "maxLength": MAX_CREDENTIAL_ALIAS_CHARS, "pattern": "^[a-z0-9-]+$", "description": "A host-owned credential profile alias. The host resolves its values after approval; the model never sees them. Do not combine this with input_text or inputs." },
-                "extract_schema": { "type": "object", "description": "Optional JSON schema for chat extract when System One sets need_extract" },
+                "extract_schema": { "type": "object", "description": "Optional JSON schema. When set, each kept page is extracted into this schema. When omitted, System One decides whether to summarize the page body." },
                 "respect_robots": { "type": "boolean", "default": respect_robots, "description": "Fetch and enforce robots.txt for each origin." }
             },
             "required": ["seed_url", "goal"],

@@ -15,18 +15,61 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn system_one_answer(id: &str, choice: &str) -> serde_json::Value {
-    json!({
-        "model": "jev-latest",
-        "answers": {
-            id: {
+    system_one_answers(&[(id, choice)])
+}
+
+fn system_one_answers(pairs: &[(&str, &str)]) -> serde_json::Value {
+    let mut answers = serde_json::Map::new();
+    for (id, choice) in pairs {
+        answers.insert(
+            (*id).to_string(),
+            json!({
                 "type": "choice",
                 "choice": choice,
                 "probabilities": {},
                 "confidence": 0.9
-            }
-        },
+            }),
+        );
+    }
+    json!({
+        "model": "jev-latest",
+        "answers": answers,
         "usage": { "input_tokens": 8, "output_tokens": 2 }
     })
+}
+
+fn chat_completion(content: &str) -> serde_json::Value {
+    json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "mock",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": content },
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+    })
+}
+
+fn llm_on_mock(http: &HttpClient, mock_uri: &str) -> AgenticLlm {
+    let mut creds = ProviderCredentials::new();
+    creds.insert_key(ProviderId::TypeSafe, "ts-test");
+    creds.insert_base_url(ProviderId::TypeSafe, mock_uri);
+    creds.insert_key(ProviderId::OpenAi, "sk-test");
+    creds.insert_base_url(ProviderId::OpenAi, mock_uri);
+    AgenticLlm {
+        http: http.clone(),
+        hooks: Arc::new(HookRegistry::new()),
+        guardrails: Arc::new(GuardrailRegistry::new()),
+        options: ChatOptions {
+            api_key: secrecy::SecretString::from("sk-test"),
+            model: "mock".into(),
+            base_url: mock_uri.to_string(),
+            provider_credentials: Some(Arc::new(creds)),
+            ..Default::default()
+        },
+    }
 }
 
 async fn mount_system_one_once(mock: &MockServer, id: &str, choice: &str) {
@@ -904,6 +947,102 @@ async fn agentic_crawl_stops_when_goal_page_reached() {
         !actor.actions.iter().any(|a| a.starts_with("follow:")),
         "must not keep walking after the goal page, actions={:?}",
         actor.actions
+    );
+}
+
+#[tokio::test]
+async fn agentic_crawl_extracts_when_system_one_asks() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(system_one_answers(&[("done", "yes"), ("extract", "yes")])),
+        )
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(chat_completion("Pit bulls are a dog type, not one breed.")),
+        )
+        .mount(&mock)
+        .await;
+
+    let http = HttpClient::new(ClientConfig::default()).expect("http");
+    let llm = llm_on_mock(&http, &mock.uri());
+    let mut actor = ScriptedPageActor::new(vec![page(
+        "https://en.wikipedia.org/wiki/Pit_bull",
+        "Pit bull",
+        "History",
+        "https://en.wikipedia.org/wiki/Bull_and_terrier",
+    )]);
+    let mut cfg = AgenticCrawlConfig::new(
+        "https://en.wikipedia.org/wiki/Pit_bull",
+        "why people fear pit bulls",
+    );
+    cfg.use_env_system_one = false;
+    cfg.max_steps = 2;
+    cfg.max_pages = 2;
+
+    let out = agentic_crawl(&mut actor, &cfg, &http, Some(&llm))
+        .await
+        .expect("crawl");
+    assert_eq!(out["ok"], json!(true));
+    assert_eq!(out["stopped_reason"], json!("system_one_stop"));
+    assert_eq!(out["via_system_one"]["extracts"], json!(1));
+    assert_eq!(
+        out["pages"][0]["extract"]["summary"],
+        json!("Pit bulls are a dog type, not one breed.")
+    );
+    let excerpt = out["pages"][0]["excerpt"].as_str().expect("excerpt");
+    assert!(
+        excerpt.contains("Pit bull body"),
+        "excerpt should be page prose, got {excerpt}"
+    );
+}
+
+#[tokio::test]
+async fn agentic_crawl_uses_extract_schema_without_an_extract_answer() {
+    let mock = MockServer::start().await;
+    mount_system_one_rest(&mock, "done", "yes").await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(chat_completion(r#"{"position":"opposes breed bans"}"#)),
+        )
+        .mount(&mock)
+        .await;
+
+    let http = HttpClient::new(ClientConfig::default()).expect("http");
+    let llm = llm_on_mock(&http, &mock.uri());
+    let mut actor = ScriptedPageActor::new(vec![page(
+        "https://www.aspca.org/position-statement-pit-bulls",
+        "ASPCA position",
+        "policy",
+        "https://www.aspca.org/next",
+    )]);
+    let mut cfg = AgenticCrawlConfig::new(
+        "https://www.aspca.org/position-statement-pit-bulls",
+        "ASPCA position on pit bulls",
+    );
+    cfg.use_env_system_one = false;
+    cfg.max_steps = 2;
+    cfg.max_pages = 2;
+    cfg.extract_schema = Some(json!({
+        "type": "object",
+        "properties": { "position": { "type": "string" } }
+    }));
+
+    let out = agentic_crawl(&mut actor, &cfg, &http, Some(&llm))
+        .await
+        .expect("crawl");
+    assert_eq!(out["via_system_one"]["extracts"], json!(1));
+    assert_eq!(
+        out["pages"][0]["extract"]["data"]["position"],
+        json!("opposes breed bans")
     );
 }
 

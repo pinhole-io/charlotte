@@ -71,6 +71,26 @@ const OBSERVE_JS: &str = r#"
     const vw = window.innerWidth || 0;
     return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
   }
+  function charlottePageText() {
+    const root =
+      document.querySelector('#mw-content-text .mw-parser-output') ||
+      document.querySelector("article") ||
+      document.querySelector("main") ||
+      document.querySelector('[role="main"]') ||
+      document.querySelector('#content') ||
+      document.body;
+    if (!root) return "";
+    const prose = [];
+    for (const p of root.querySelectorAll("p")) {
+      if (p.closest("nav, aside, footer, #toc, .toc, .vector-toc, .navbox, .mw-empty-elt, .hatnote")) {
+        continue;
+      }
+      const text = (p.innerText || "").trim();
+      if (text) prose.push(text);
+    }
+    if (prose.length) return prose.join("\n\n");
+    return root.innerText || "";
+  }
   document.querySelectorAll("[data-charlotte-tid]").forEach((el) => {
     el.removeAttribute("data-charlotte-tid");
   });
@@ -120,7 +140,7 @@ const OBSERVE_JS: &str = r#"
       in_viewport: charlotteInViewport(r),
     });
   }
-  const body = document.body ? document.body.innerText || "" : "";
+  const body = charlottePageText();
   const y = Math.round(window.scrollY || document.documentElement.scrollTop || 0);
   const vh = Math.round(window.innerHeight || 0);
   const h = Math.round(Math.max(
@@ -189,6 +209,26 @@ const GET_LINKS_JS: &str = r#"
     const vw = window.innerWidth || 0;
     return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
   }
+  function charlottePageText() {
+    const root =
+      document.querySelector('#mw-content-text .mw-parser-output') ||
+      document.querySelector("article") ||
+      document.querySelector("main") ||
+      document.querySelector('[role="main"]') ||
+      document.querySelector('#content') ||
+      document.body;
+    if (!root) return "";
+    const prose = [];
+    for (const p of root.querySelectorAll("p")) {
+      if (p.closest("nav, aside, footer, #toc, .toc, .vector-toc, .navbox, .mw-empty-elt, .hatnote")) {
+        continue;
+      }
+      const text = (p.innerText || "").trim();
+      if (text) prose.push(text);
+    }
+    if (prose.length) return prose.join("\n\n");
+    return root.innerText || "";
+  }
   document.querySelectorAll("[data-charlotte-tid]").forEach((el) => {
     el.removeAttribute("data-charlotte-tid");
   });
@@ -226,7 +266,7 @@ const GET_LINKS_JS: &str = r#"
       in_viewport: charlotteInViewport(r),
     });
   }
-  const body = document.body ? document.body.innerText || "" : "";
+  const body = charlottePageText();
   const y = Math.round(window.scrollY || document.documentElement.scrollTop || 0);
   const vh = Math.round(window.innerHeight || 0);
   const h = Math.round(Math.max(
@@ -428,6 +468,16 @@ pub(crate) fn observe_page_from_eval(raw: &Value) -> Result<ObservePage, Charlot
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn observe_reads_article_paragraphs() {
+        for source in [OBSERVE_JS, GET_LINKS_JS] {
+            assert!(source.contains("function charlottePageText"));
+            assert!(source.contains("markdown: body.slice(0, 8000)"));
+            assert!(source.contains("const body = charlottePageText()"));
+            assert!(!source.contains("document.body.innerText"));
+        }
+    }
 
     #[test]
     fn tid_selector_accepts_t_ids() {

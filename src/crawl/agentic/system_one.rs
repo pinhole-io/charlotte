@@ -5,7 +5,9 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use superglue::http::HttpClient;
 use superglue::providers::ProviderCredentials;
-use superglue::systemone::{Choice, Questions, SystemOneRequest, choice_if_confident, system_one};
+use superglue::systemone::{
+    Choice, Questions, SystemOneRequest, SystemOneResponse, choice_if_confident, system_one,
+};
 
 use super::targets::{
     EXCERPT_CLIP, GOAL_CLIP, LinkSection, ObservePage, RawTarget, TITLE_CLIP, canonical_page_url,
@@ -130,16 +132,20 @@ pub async fn judge_step(
     ctx: &StepCtx<'_>,
 ) -> Result<StepDecision, String> {
     let state = step_state(ctx);
-    if ask_done(http, credentials, &state).await? {
-        return Ok(StepDecision {
-            keep: true,
-            act: CrawlAct::Stop,
-            target_id: None,
-            section_key: None,
-            input_name: None,
-            need_extract: false,
-            via_system_one: true,
-        });
+    let (done, extract) = ask_done_and_extract(http, credentials, &state).await?;
+    if done {
+        return Ok(apply_extract(
+            StepDecision {
+                keep: true,
+                act: CrawlAct::Stop,
+                target_id: None,
+                section_key: None,
+                input_name: None,
+                need_extract: false,
+                via_system_one: true,
+            },
+            extract,
+        ));
     }
     let act = ask_act(http, credentials, ctx, &state).await?;
     match act {
@@ -162,17 +168,20 @@ pub async fn judge_step(
             {
                 return Err(format!("system_one follow already tried from here: {href}"));
             }
-            Ok(StepDecision {
-                keep: true,
-                act,
-                target_id: target_id.clone(),
-                section_key: target_id
-                    .as_deref()
-                    .and_then(|id| section_key_for(id, ctx.sections)),
-                input_name: None,
-                need_extract: false,
-                via_system_one: true,
-            })
+            Ok(apply_extract(
+                StepDecision {
+                    keep: true,
+                    act,
+                    target_id: target_id.clone(),
+                    section_key: target_id
+                        .as_deref()
+                        .and_then(|id| section_key_for(id, ctx.sections)),
+                    input_name: None,
+                    need_extract: false,
+                    via_system_one: true,
+                },
+                extract,
+            ))
         }
         CrawlAct::Click | CrawlAct::Type => {
             let controls =
@@ -184,26 +193,41 @@ pub async fn judge_step(
             } else {
                 None
             };
-            Ok(StepDecision {
-                keep: true,
-                act,
-                target_id,
+            Ok(apply_extract(
+                StepDecision {
+                    keep: true,
+                    act,
+                    target_id,
+                    section_key: None,
+                    input_name,
+                    need_extract: false,
+                    via_system_one: true,
+                },
+                extract,
+            ))
+        }
+        other => Ok(apply_extract(
+            StepDecision {
+                keep: other.keeps_page(),
+                act: other,
+                target_id: None,
                 section_key: None,
-                input_name,
+                input_name: None,
                 need_extract: false,
                 via_system_one: true,
-            })
-        }
-        other => Ok(StepDecision {
-            keep: other.keeps_page(),
-            act: other,
-            target_id: None,
-            section_key: None,
-            input_name: None,
-            need_extract: false,
-            via_system_one: true,
-        }),
+            },
+            extract,
+        )),
     }
+}
+
+/// System One said the body is worth keeping. A scroll still keeps the page.
+fn apply_extract(mut decision: StepDecision, extract: bool) -> StepDecision {
+    if extract {
+        decision.keep = true;
+        decision.need_extract = true;
+    }
+    decision
 }
 
 /// Ask which named value belongs in the field System One just chose.
@@ -289,12 +313,28 @@ fn step_state(ctx: &StepCtx<'_>) -> Value {
     })
 }
 
-async fn ask_done(
+async fn ask_done_and_extract(
     http: &HttpClient,
     credentials: &ProviderCredentials,
     state: &Value,
-) -> Result<bool, String> {
-    let question = Choice::new(
+) -> Result<(bool, bool), String> {
+    let mut questions = Questions::new();
+    questions.insert("done", done_choice());
+    questions.insert("extract", extract_choice());
+    let response = ask_response(http, credentials, state, questions).await?;
+    let done = parse_done(&confident_choice(&response, "done")?)?;
+    // A one-question reply has no extract answer. Leave extraction off.
+    let extract = match response.answer("extract") {
+        Some(answer) => choice_if_confident(answer, SYSTEM_ONE_MIN_CONFIDENCE)
+            .or_else(|| answer.choice())
+            .is_some_and(|raw| raw == "yes"),
+        None => false,
+    };
+    Ok((done, extract))
+}
+
+fn done_choice() -> Choice {
+    Choice::new(
         "Has the crawl already found what was asked? \
          Look at this page, `kept`, and `opened`. This page counts. \
          If the goal asked for several results, answer yes only when that many matching results are in hand. \
@@ -305,9 +345,21 @@ async fn ask_done(
         "yes",
         "The crawl has the result, or enough results. Keep this page and stop.",
     )
-    .option("no", "Need another page. Pick a next action.");
-    let raw = ask_choice(http, credentials, state, "done", question).await?;
-    parse_done(&raw)
+    .option("no", "Need another page. Pick a next action.")
+}
+
+fn extract_choice() -> Choice {
+    Choice::new(
+        "Does this page body contain prose the goal needs? \
+         A cookie banner, site chrome, or a table of contents does not count. \
+         Answer yes to copy the body into the result. Do that when you will stop on this page. \
+         Answer no when the body is only navigation or a form.",
+    )
+    .option(
+        "yes",
+        "Extract the body. The result needs this page's prose.",
+    )
+    .option("no", "Skip extraction. The body is not the answer.")
 }
 
 fn parse_done(raw: &str) -> Result<bool, String> {
@@ -708,16 +760,31 @@ async fn ask_choice(
 ) -> Result<String, String> {
     let mut questions = Questions::new();
     questions.insert(id, question);
+    let response = ask_response(http, credentials, state, questions).await?;
+    confident_choice(&response, id)
+}
+
+async fn ask_response(
+    http: &HttpClient,
+    credentials: &ProviderCredentials,
+    state: &Value,
+    questions: Questions,
+) -> Result<SystemOneResponse, String> {
     let request = SystemOneRequest::new(state.clone(), questions).with_model("typesafe:jev-latest");
     let work = system_one(http, credentials, request);
-    let response = match tokio::time::timeout(SYSTEM_ONE_TIMEOUT, work).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(err)) => return Err(format!("system_one: {err}")),
-        Err(_) => return Err("system_one timed out".into()),
-    };
+    match tokio::time::timeout(SYSTEM_ONE_TIMEOUT, work).await {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(err)) => Err(format!("system_one: {err}")),
+        Err(_) => Err("system_one timed out".into()),
+    }
+}
+
+fn confident_choice(response: &SystemOneResponse, id: &str) -> Result<String, String> {
     response
         .answer(id)
-        .and_then(|a| choice_if_confident(a, SYSTEM_ONE_MIN_CONFIDENCE).or_else(|| a.choice()))
+        .and_then(|answer| {
+            choice_if_confident(answer, SYSTEM_ONE_MIN_CONFIDENCE).or_else(|| answer.choice())
+        })
         .map(str::to_string)
         .ok_or_else(|| format!("system_one {id} missing"))
 }
@@ -955,6 +1022,43 @@ mod tests {
         assert_eq!(parse_done("yes").expect("yes"), true);
         assert_eq!(parse_done("no").expect("no"), false);
         assert!(parse_done("stop").is_err());
+    }
+
+    #[test]
+    fn extract_yes_keeps_a_scroll_and_requests_the_body() {
+        let decision = apply_extract(
+            StepDecision {
+                keep: false,
+                act: CrawlAct::ScrollDown,
+                target_id: None,
+                section_key: None,
+                input_name: None,
+                need_extract: false,
+                via_system_one: true,
+            },
+            true,
+        );
+        assert!(decision.keep);
+        assert!(decision.need_extract);
+        assert_eq!(decision.act, CrawlAct::ScrollDown);
+    }
+
+    #[test]
+    fn extract_no_leaves_a_scroll_unkept() {
+        let decision = apply_extract(
+            StepDecision {
+                keep: false,
+                act: CrawlAct::ScrollDown,
+                target_id: None,
+                section_key: None,
+                input_name: None,
+                need_extract: false,
+                via_system_one: true,
+            },
+            false,
+        );
+        assert!(!decision.keep);
+        assert!(!decision.need_extract);
     }
 
     #[test]

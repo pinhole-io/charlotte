@@ -42,8 +42,10 @@ const SCROLL_DELTA: i32 = 600;
 /// Path hops kept in System One state.
 const PATH_KEEP: usize = 20;
 
-/// Page body kept in the tool result. Long Wikipedia text must not bury the trace.
-const PAGE_RESULT_CLIP: usize = 400;
+/// Lead text kept beside the trace. Chat extract holds the longer brief.
+///
+/// This matches the excerpt System One already sees (`EXCERPT_CLIP`).
+const PAGE_RESULT_CLIP: usize = 2_000;
 
 /// Practical "no limit" for System One steps and kept pages. The chat model must not lower this.
 pub const AGENTIC_CRAWL_NO_LIMIT: usize = 9_999_999;
@@ -329,7 +331,12 @@ pub async fn agentic_crawl(
             scrolls_here: scrolls_on.get(&page_key).copied().unwrap_or(0),
             new_targets_since_scroll,
         };
-        let decision = decide_step(http, creds.as_ref(), &ctx).await?;
+        let mut decision = decide_step(http, creds.as_ref(), &ctx).await?;
+        // The caller passed a schema. That is a request to extract every new page.
+        if config.extract_schema.is_some() && !page.markdown.trim().is_empty() {
+            decision.keep = true;
+            decision.need_extract = true;
+        }
         if decision.via_system_one {
             system_one_steps += 1;
         } else {
@@ -364,34 +371,32 @@ pub async fn agentic_crawl(
                 "via_system_one": decision.via_system_one,
                 "blocked": "repeated_action",
             }));
+            // The crawl is stuck on this page. Keep its text before leaving.
+            remember_page(
+                &mut kept_pages,
+                &mut pages_kept,
+                &mut extracts,
+                &page,
+                llm,
+                config,
+                decision.need_extract,
+            )
+            .await;
             stopped_reason = "repeated_action".into();
             break;
         }
 
-        if decision.keep && !already_kept(&kept_pages, &page.url) {
-            let mut row = kept_page_row(&page);
-            if decision.need_extract
-                && let Some(llm) = llm
-            {
-                match extract_or_summarize(
-                    llm,
-                    &page.markdown,
-                    &config.goal,
-                    config.extract_schema.as_ref(),
-                )
-                .await
-                {
-                    Ok(extracted) => {
-                        row["extract"] = extracted;
-                        extracts += 1;
-                    }
-                    Err(err) => {
-                        row["extract_error"] = json!(err.to_string());
-                    }
-                }
-            }
-            kept_pages.push(row);
-            pages_kept += 1;
+        if decision.keep {
+            remember_page(
+                &mut kept_pages,
+                &mut pages_kept,
+                &mut extracts,
+                &page,
+                llm,
+                config,
+                decision.need_extract,
+            )
+            .await;
         }
 
         trace.push(json!({
@@ -811,6 +816,41 @@ async fn check_nav(
         return Err(CharlotteError::msg("url blocked by robots.txt"));
     }
     Ok(())
+}
+
+async fn remember_page(
+    kept_pages: &mut Vec<Value>,
+    pages_kept: &mut usize,
+    extracts: &mut u32,
+    page: &ObservePage,
+    llm: Option<&AgenticLlm>,
+    config: &AgenticCrawlConfig,
+    need_extract: bool,
+) {
+    if already_kept(kept_pages, &page.url) {
+        return;
+    }
+    let mut row = kept_page_row(page);
+    if need_extract && let Some(llm) = llm {
+        match extract_or_summarize(
+            llm,
+            &page.markdown,
+            &config.goal,
+            config.extract_schema.as_ref(),
+        )
+        .await
+        {
+            Ok(extracted) => {
+                row["extract"] = extracted;
+                *extracts += 1;
+            }
+            Err(err) => {
+                row["extract_error"] = json!(err.to_string());
+            }
+        }
+    }
+    kept_pages.push(row);
+    *pages_kept += 1;
 }
 
 async fn extract_or_summarize(
