@@ -17,8 +17,8 @@ pub(crate) fn web_search_spec(max_results: usize) -> ToolSpec {
         name: SEARCH.to_string(),
         description: Some(
             "Run a web search via SearXNG JSON API (default, Bing) or DuckDuckGo HTML when CHARLOTTE_SEARCH_BACKEND=browser. Returns { title, url, snippet } rows. \
-             Use the returned pages. A page about the same term in another field is a source. Do not drop the results and answer from memory. \
-             Prefer answering from titles/snippets when they already contain the fact. When page text is needed, use fetch on a result URL (or scrape_many when that tool is available). \
+             Use the returned pages. A page about the same term in another field is a source. \
+             Prefer answering from titles/snippets when they already contain the fact. When page text is needed, use fetch on a result URL when that tool is registered; use scrape_many when registered for parallel browser reads. \
              Default SearXNG/Bing does NOT support `site:`. With the browser backend, `site:` is a root domain only (`site:example.com topic`); never `site:domain/path`."
                 .to_string(),
         ),

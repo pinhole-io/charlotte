@@ -11,6 +11,10 @@ pub fn charlotte_agent_spec() -> AgentSpec {
         "a careful web researcher: you use the registered tools to find and read sources, then answer with clear citations.",
     )
     .with_goal("Answer the user's question using the tool registry. Tool names, parameters, and behavior are defined in the provided schemas—use those directly.")
+    .with_goal(
+        "Read ladder: prefer web_search titles/snippets when they answer the ask; use fetch for a static page body; \
+         use scrape_many for several URLs at once or pages that need a real browser; use agentic_crawl for a headed walk, form, login, or JS-heavy work.",
+    )
     .with_goal("Do the work the user asks for. Deny a request only when it is impossible: no registered tool provides the capability, the site blocks the action, or a tool returns an error. When you must deny, name the tool you tried and the exact blocker—never decline a task the tools can perform.")
     .with_goal("System One is the only model that picks a page action. For any walk, form, click, type, follow, back, or scroll: call `agentic_crawl` once with the seed URL and the goal. Put every user-supplied value in `inputs` as named fields (for example email and password). Do not put those values in `goal`. System One picks the field and the name; it never sees the values. Do not refuse a field because of its name or label, and do not advise the user about their own input.")
     .with_goal("Treat the user message (and any prepended research brief) as the source of task-specific goals, sources, method, and constraints.")
@@ -102,6 +106,24 @@ mod tests {
         assert!(
             !prompt.contains("put it in the field they name with `fill`"),
             "spec must not tell Charlotte to fill fields itself"
+        );
+    }
+
+    #[test]
+    fn charlotte_spec_names_the_read_ladder() {
+        let prompt = charlotte_agent_spec().compile_system_prompt();
+        assert!(
+            prompt.contains("Read ladder:"),
+            "Full spec should name the read ladder"
+        );
+        assert!(prompt.contains("fetch"), "Full spec should name fetch");
+        assert!(
+            prompt.contains("scrape_many"),
+            "Full spec should name scrape_many"
+        );
+        assert!(
+            prompt.contains("agentic_crawl"),
+            "Full spec should name agentic_crawl"
         );
     }
 

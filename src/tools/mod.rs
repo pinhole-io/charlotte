@@ -77,6 +77,7 @@ pub fn charlotte_tool_names(profile: CharlotteToolProfile) -> &'static [&'static
             {
                 &[
                     SEARCH,
+                    FETCH,
                     CONTENT,
                     PAGE_MARKDOWN,
                     LINKS,
@@ -98,6 +99,7 @@ pub fn charlotte_tool_names(profile: CharlotteToolProfile) -> &'static [&'static
             {
                 &[
                     SEARCH,
+                    FETCH,
                     CONTENT,
                     PAGE_MARKDOWN,
                     LINKS,
@@ -409,6 +411,15 @@ async fn register_full_charlotte_tools(
 ) -> Result<(), ToolInvokeError> {
     register_browser_tool(
         registry,
+        Arc::new(FetchTool {
+            http: http.clone(),
+            policy: config.url_policy.clone(),
+        }),
+        Arc::clone(guard_state),
+    )
+    .await?;
+    register_browser_tool(
+        registry,
         Arc::new(PageContentTool(Arc::clone(h))),
         Arc::clone(guard_state),
     )
@@ -529,6 +540,8 @@ mod profile_tests {
     fn full_profile_exposes_reads_and_agentic_crawl_only() {
         let names = charlotte_tool_names(CharlotteToolProfile::Full);
         assert!(names.contains(&"web_search"));
+        assert!(names.contains(&"fetch"));
+        assert_eq!(names.get(1), Some(&"fetch"));
         assert!(names.contains(&"scrape_many"));
         assert!(names.contains(&"site_crawl_chunks"));
         assert!(names.contains(&"agentic_crawl"));

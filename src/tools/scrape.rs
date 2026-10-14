@@ -25,7 +25,8 @@ impl Tool for ScrapeManyTool {
         ToolSpec {
             name: SCRAPE_MANY.to_string(),
             description: Some(
-                "Scrape multiple URLs in parallel on isolated tabs of the shared browser. Returns per-URL markdown/title/error rows."
+                "Scrape multiple URLs in parallel on isolated tabs of the shared browser. Returns per-URL markdown/title/error rows. \
+                 Use this for several URLs at once or pages that need a real browser. Prefer fetch for one cold HTTP URL when that tool is registered."
                     .to_string(),
             ),
             static_tool: false,

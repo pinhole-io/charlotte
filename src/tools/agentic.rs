@@ -33,7 +33,12 @@ pub(crate) fn agentic_crawl_spec(
     ToolSpec {
         name: AGENTIC_CRAWL.to_string(),
         description: Some(
-            "The only page-action tool. System One picks every click, type, follow, back, scroll, and stop. Start from a direct content URL, preferably from web_search; do not use a search-engine results page because search engines commonly block browser automation. Use this once to walk, fill a form, or complete a task on the headed page. Pass user-supplied values in `inputs` (named fields). Do not put secrets in `goal`. You have no click, type, fill, scroll, or navigate tool. site_crawl_chunks is a BFS dump only.".to_string(),
+            "The only page-action tool. System One picks every click, type, follow, back, scroll, and stop. \
+             Prefer fetch for a static page body from a known URL. Use this for a headed walk, form fill, login, or JS-heavy work. \
+             Start from a direct content URL, preferably from web_search; do not use a search-engine results page because search engines commonly block browser automation. \
+             Use this once to walk, fill a form, or complete a task on the headed page. Pass user-supplied values in `inputs` (named fields). \
+             Do not put secrets in `goal`. You have no click, type, fill, scroll, or navigate tool. site_crawl_chunks is a BFS dump only."
+                .to_string(),
         ),
         static_tool: false,
         parameters_schema: json!({

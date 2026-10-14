@@ -213,9 +213,10 @@ pub fn brief_task_process_hints(shape: BriefTaskShape, config: &SearchConfig) ->
             "Task shape: **open-web research**.\n\
              Suggested Process skeleton:\n\
              1. One focused `web_search` with keywords from the user task ({search_note}).\n\
-             2. If snippets are insufficient, `scrape_many` on the 1–3 most authoritative URLs from results (parallel); otherwise answer from snippets.\n\
-             3. If gap remains: one different `web_search` query (do not repeat the first).\n\
-             4. `notepad_store` key facts; final answer cites URLs from tool output."
+             2. Prefer answering from titles/snippets when they already contain the fact.\n\
+             3. If a page body is needed: one `fetch` on the best result URL; use `scrape_many` for 2–3 parallel browser reads when several pages or JS-rendered pages are required.\n\
+             4. If gap remains: one different `web_search` query (do not repeat the first).\n\
+             5. `notepad_store` key facts; final answer cites URLs from tool output."
         ),
     }
 }
@@ -546,7 +547,9 @@ mod tests {
     fn brief_task_process_hints_follow_the_system_one_shape() {
         let open = brief_task_process_hints(BriefTaskShape::OpenWeb, &SearchConfig::default());
         assert!(open.contains("open-web"));
+        assert!(open.contains("fetch"));
         assert!(open.contains("scrape_many"));
+        assert!(open.contains("Prefer answering from titles/snippets"));
         let compare = brief_task_process_hints(BriefTaskShape::Compare, &SearchConfig::default());
         assert!(compare.contains("comparison"));
         let missing = brief_task_process_hints_shaped(&SearchConfig::default(), None);
