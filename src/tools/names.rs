@@ -1,6 +1,7 @@
 //! Stable tool names registered on the Charlotte tool registry.
 
 pub(crate) const SEARCH: &str = "web_search";
+pub(crate) const FETCH: &str = "fetch";
 pub(crate) const CONTENT: &str = "page_content";
 pub(crate) const PAGE_MARKDOWN: &str = "page_markdown";
 pub(crate) const LINKS: &str = "list_links";

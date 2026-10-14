@@ -87,6 +87,7 @@ pub use scratchpad::{
     register_charlotte_with_notepad,
 };
 pub use search::{SearchBackendKind, SearchConfig, web_search};
+pub use tools::fetch_url;
 pub use tools::{
     CharlotteTool, CharlotteToolLimits, CharlotteToolProfile, CharlotteToolSet,
     RegisteredCharlotteTool, ResolvedCredential, ToolLlmContext, ToolRuntimeContext,

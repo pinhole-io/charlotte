@@ -17,9 +17,9 @@ pub(crate) fn web_search_spec(max_results: usize) -> ToolSpec {
         name: SEARCH.to_string(),
         description: Some(
             "Run a web search via SearXNG JSON API (default, Bing) or DuckDuckGo HTML when CHARLOTTE_SEARCH_BACKEND=browser. Returns { title, url, snippet } rows. \
-             Prefer answering from titles/snippets when they already contain the fact. When page text is needed, use scrape_many on result URLs (not serial navigate). \
-             Default SearXNG/Bing does NOT support `site:` — use plain keywords for open-web search, or navigate + page_markdown/list_links for on-site discovery when those tools are available. \
-             With browser backend, `site:` root domain only (`site:example.com topic`); never `site:domain/path`."
+             Use the returned pages. A page about the same term in another field is a source. Do not drop the results and answer from memory. \
+             Prefer answering from titles/snippets when they already contain the fact. When page text is needed, use fetch on a result URL (or scrape_many when that tool is available). \
+             Default SearXNG/Bing does NOT support `site:`. With the browser backend, `site:` is a root domain only (`site:example.com topic`); never `site:domain/path`."
                 .to_string(),
         ),
         static_tool: false,
@@ -30,7 +30,7 @@ pub(crate) fn web_search_spec(max_results: usize) -> ToolSpec {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": MAX_SEARCH_QUERY_CHARS,
-                    "description": "Search query. On default SearXNG/Bing, do not use `site:` (returns no results). Use plain keywords, or browser tools for on-site discovery. Browser backend only: `site:example.com topic` with root domain, not paths in the operator."
+                    "description": "Search query. On SearXNG/Bing, do not use `site:`. A result about the same term in another field is still a source."
                 },
                 "max_results": { "type": "integer", "minimum": 1, "maximum": max_results, "description": "Max results", "default": 8.min(max_results) }
             },

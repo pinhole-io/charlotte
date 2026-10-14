@@ -201,7 +201,7 @@ fn site_operator_unsupported_response(query: &str) -> Value {
         "query": query,
         "results": [],
         "message": "SearXNG uses Bing, which does not support the site: search operator.",
-        "hint": "For pages on a specific site, use navigate + page_markdown or list_links. For open-web search, omit site: and use plain keywords (e.g. \"Apple official Twitter\"). Set CHARLOTTE_SEARCH_BACKEND=browser for DuckDuckGo HTML search with site: support.",
+        "hint": "Omit site:. Search with the topic words. For a known URL, use navigate + page_markdown or list_links.",
     })
 }
 

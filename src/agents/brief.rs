@@ -138,8 +138,8 @@ pub fn brief_search_context(config: &SearchConfig) -> String {
              - `web_search` cooldown: ~{cooldown_secs}s between completed calls (serialized; parallel calls queue)\n\
              \n\
              ### web_search on this backend\n\
-             - Use plain keywords (entity + topic). Example: `Apple official Twitter Instagram`.\n\
-             - Do NOT plan `site:` queries — Charlotte rejects them or Bing returns empty.\n\
+             - Use the pages the search returns. A page about the same term in another field is a source.\n\
+             - Do NOT plan `site:` queries — Charlotte rejects them before the search.\n\
              - Plan 1–2 `web_search` calls per agent round, not 3–4 parallel variants.\n\
              - Empty results, `unresponsive_engines`, or `searxng_circuit_open`: stop retrying the same query; pivot to browser tools.\n\
              \n\
@@ -175,7 +175,9 @@ pub fn brief_search_context(config: &SearchConfig) -> String {
 #[must_use]
 pub fn brief_task_process_hints(shape: BriefTaskShape, config: &SearchConfig) -> String {
     let search_note = match config.backend {
-        SearchBackendKind::Searxng => "Use plain-keyword web_search only (no site:).",
+        SearchBackendKind::Searxng => {
+            "Use the returned pages, including another field for the same term. No site:."
+        }
         SearchBackendKind::Browser => "web_search may use site:example.com with root domain only.",
     };
     match shape {

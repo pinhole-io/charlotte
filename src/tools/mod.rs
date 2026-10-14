@@ -1,6 +1,7 @@
 //! [`superglue::tools::Tool`] implementations backed by [`crate::BrowserHandle`].
 
 mod agentic;
+mod fetch;
 mod llm;
 mod logging;
 mod map;
@@ -30,14 +31,18 @@ use crate::crawl::scrape_many::LazyBrowserPool;
 use crate::search::SearchConfig;
 
 use agentic::AgenticCrawlTool;
+use fetch::FetchTool;
+
+pub use fetch::fetch_url;
 use llm::{ExtractTool, SummarizeTool};
 use logging::{charlotte_browser_tool_policy, register_browser_tool, wrap_browser_tool};
 use map::MapTool;
 #[cfg(feature = "documents")]
 use names::PARSE_DOCUMENT;
 use names::{
-    AGENTIC_CRAWL, CONSOLE_MESSAGES, CONTENT, EXTRACT, LINKS, LIST_TABS, MAP, NETWORK_REQUESTS,
-    PAGE_MARKDOWN, SCRAPE_MANY, SCREENSHOT, SEARCH, SITE_CRAWL_CHUNKS, SUMMARIZE, WAIT_FOR,
+    AGENTIC_CRAWL, CONSOLE_MESSAGES, CONTENT, EXTRACT, FETCH, LINKS, LIST_TABS, MAP,
+    NETWORK_REQUESTS, PAGE_MARKDOWN, SCRAPE_MANY, SCREENSHOT, SEARCH, SITE_CRAWL_CHUNKS, SUMMARIZE,
+    WAIT_FOR,
 };
 use page::{
     ConsoleMessagesTool, ListLinksTool, ListTabsTool, NetworkRequestsTool, PageContentTool,
@@ -170,6 +175,7 @@ impl ToolRuntimeContext for StaticToolRuntimeContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CharlotteTool {
     WebSearch,
+    Fetch,
     AgenticCrawl,
 }
 
@@ -178,6 +184,7 @@ impl CharlotteTool {
     pub const fn name(self) -> &'static str {
         match self {
             Self::WebSearch => SEARCH,
+            Self::Fetch => FETCH,
             Self::AgenticCrawl => AGENTIC_CRAWL,
         }
     }
@@ -233,6 +240,7 @@ pub fn charlotte_tool_specs(
         .iter()
         .map(|tool| match tool {
             CharlotteTool::WebSearch => search::web_search_spec(limits.max_search_results),
+            CharlotteTool::Fetch => fetch::fetch_spec(),
             CharlotteTool::AgenticCrawl => agentic::agentic_crawl_spec(
                 limits.max_crawl_pages,
                 limits.max_crawl_steps,
@@ -310,6 +318,10 @@ impl CharlotteToolSet {
                     http: http.clone(),
                     search: search_config.clone(),
                     max_results: limits.max_search_results,
+                }),
+                CharlotteTool::Fetch => Arc::new(FetchTool {
+                    http: http.clone(),
+                    policy: config.url_policy.clone(),
                 }),
                 CharlotteTool::AgenticCrawl => Arc::new(AgenticCrawlTool {
                     browser: Arc::clone(&browser),
@@ -549,7 +561,11 @@ mod profile_tests {
             respect_robots: true,
         };
         let specs = charlotte_tool_specs(
-            &[CharlotteTool::WebSearch, CharlotteTool::AgenticCrawl],
+            &[
+                CharlotteTool::WebSearch,
+                CharlotteTool::Fetch,
+                CharlotteTool::AgenticCrawl,
+            ],
             &limits,
         )
         .expect("valid selected schemas");
@@ -563,21 +579,26 @@ mod profile_tests {
             specs[0].parameters_schema["properties"]["max_results"]["default"],
             7
         );
-        assert_eq!(specs[1].name, "agentic_crawl");
+        assert_eq!(specs[1].name, "fetch");
         assert_eq!(
-            specs[1].parameters_schema["properties"]["max_pages"]["maximum"],
+            specs[1].parameters_schema["properties"]["url"]["type"],
+            "string"
+        );
+        assert_eq!(specs[2].name, "agentic_crawl");
+        assert_eq!(
+            specs[2].parameters_schema["properties"]["max_pages"]["maximum"],
             9
         );
         assert_eq!(
-            specs[1].parameters_schema["properties"]["max_pages"]["default"],
+            specs[2].parameters_schema["properties"]["max_pages"]["default"],
             9
         );
         assert_eq!(
-            specs[1].parameters_schema["properties"]["max_steps"]["maximum"],
+            specs[2].parameters_schema["properties"]["max_steps"]["maximum"],
             11
         );
         assert_eq!(
-            specs[1].parameters_schema["properties"]["respect_robots"]["default"],
+            specs[2].parameters_schema["properties"]["respect_robots"]["default"],
             true
         );
 
