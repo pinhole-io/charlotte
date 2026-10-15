@@ -25,8 +25,8 @@ pub(crate) fn fetch_spec() -> ToolSpec {
         name: FETCH.to_string(),
         description: Some(
             "Fetch an HTTP or HTTPS URL and return extracted Markdown for HTML, or capped plain text. \
-             Prefer web_search snippets when they already answer the ask. Use this when a page body is needed. \
-             Do not fetch many full pages when a few snippets are enough."
+             Prefer snippets from web_search when that tool is registered and they already answer the ask. \
+             Use this when a page body is needed. Do not fetch many full pages when a few snippets are enough."
                 .to_string(),
         ),
         static_tool: false,
