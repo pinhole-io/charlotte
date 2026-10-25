@@ -356,6 +356,46 @@ impl CharlotteToolSet {
     }
 }
 
+pub(crate) fn web_search_tool_spec() -> ToolSpec {
+    search::web_search_spec(8)
+}
+
+/// Tools for the research graph read node: `fetch`, `scrape_many`, and `agentic_crawl`.
+#[must_use]
+pub fn research_read_tools(
+    handle: &BrowserHandle,
+    config: &BrowserConfig,
+    http: &HttpClient,
+) -> Vec<Arc<dyn Tool>> {
+    let browser = Arc::new(handle.clone());
+    let guard_state = new_guard_state();
+    let limits = CharlotteToolLimits::default();
+    let tools: Vec<Arc<dyn Tool>> = vec![
+        Arc::new(FetchTool {
+            http: http.clone(),
+            policy: config.url_policy.clone(),
+        }),
+        Arc::new(ScrapeManyTool {
+            browser: Arc::clone(&browser),
+            guard_state: Arc::clone(&guard_state),
+        }),
+        Arc::new(AgenticCrawlTool {
+            browser,
+            policy: config.url_policy.clone(),
+            http: http.clone(),
+            runtime: None,
+            max_pages: limits.max_crawl_pages,
+            max_steps: limits.max_crawl_steps,
+            timeout: limits.crawl_timeout,
+            respect_robots: limits.respect_robots,
+        }),
+    ];
+    tools
+        .into_iter()
+        .map(|tool| wrap_browser_tool(tool, Arc::clone(&guard_state)))
+        .collect()
+}
+
 /// Register all Charlotte browser tools on `registry`.
 ///
 /// Returns the lazily-initialized `scrape_many` browser pool (unused until something

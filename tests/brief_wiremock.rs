@@ -113,3 +113,51 @@ async fn brief_gate_uses_system_one_when_typesafe_present() {
     assert!(decision.via_system_one);
     assert_eq!(decision.shape.map(|s| s.as_str()), Some("open-web"));
 }
+
+#[tokio::test]
+async fn clarifying_questions_hit_chat_completions() {
+    use charlotte::clarifying_questions;
+    use charlotte::parse_clarifying_questions;
+
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "model": "mock",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "{\"questions\":[\"Which years?\",\"Which region?\"]}"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+        })))
+        .mount(&mock)
+        .await;
+
+    let http = HttpClient::new(ClientConfig::default()).expect("http client");
+    let base = ChatOptions {
+        base_url: mock.uri(),
+        api_key: secrecy::SecretString::from("sk-test"),
+        model: "mock".into(),
+        max_tool_rounds: 4,
+        ..Default::default()
+    };
+    let raw = clarifying_questions(
+        &http,
+        &HookRegistry::new(),
+        &GuardrailRegistry::new(),
+        &base,
+        "How did the port change?",
+    )
+    .await
+    .expect("questions");
+    assert_eq!(
+        parse_clarifying_questions(&raw),
+        vec!["Which years?".to_string(), "Which region?".to_string()]
+    );
+}

@@ -38,6 +38,15 @@ Optional: a fenced `json` citations block if structured cites are needed.
 
 Do not perform the research yourself and do not invent facts, URLs, or listings."#;
 
+const CLARIFY_SYSTEM: &str = r#"You prepare a web-research task. Do not do the research.
+
+Read the user query. Ask only about gaps that change the work. Cover scope, depth, and breadth when those are open. Ask any other gap the query leaves open.
+
+Return JSON only, with this shape:
+{"questions":["..."]}
+
+Use at most 4 questions. Use an empty list when the query is already specific enough. Do not invent facts or URLs."#;
+
 const BRIEF_GATE_SYSTEM: &str = r#"You are a router for a web-research assistant.
 Decide whether the user message should be expanded into a research brief first.
 
@@ -450,6 +459,68 @@ async fn judge_brief_system_one(
     })
 }
 
+/// Read at most four clarifying questions from model JSON.
+///
+/// A payload that is not a string list, or an object with a `questions` string list, becomes an empty list.
+#[must_use]
+pub fn parse_clarifying_questions(text: &str) -> Vec<String> {
+    let Some(value) = clarifying_json(text) else {
+        return Vec::new();
+    };
+    let items = if let Some(items) = value.as_array() {
+        items
+    } else if let Some(items) = value.get("questions").and_then(serde_json::Value::as_array) {
+        items
+    } else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let text = item.as_str()?.trim();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            }
+        })
+        .take(4)
+        .collect()
+}
+
+fn clarifying_json(text: &str) -> Option<serde_json::Value> {
+    let trimmed = text.trim();
+    if let Ok(value) = serde_json::from_str(trimmed) {
+        return Some(value);
+    }
+    let start = trimmed.find("```json")?;
+    let rest = &trimmed[start + "```json".len()..];
+    let end = rest.find("```")?;
+    serde_json::from_str(rest[..end].trim()).ok()
+}
+
+/// Ask for clarifying questions. This call registers no tools.
+///
+/// The returned text is model JSON. Call [`parse_clarifying_questions`] before showing it.
+pub async fn clarifying_questions(
+    http: &HttpClient,
+    hooks: &HookRegistry,
+    guardrails: &GuardrailRegistry,
+    base_options: &ChatOptions,
+    user_query: &str,
+) -> Result<String, CharlotteError> {
+    let registry = ToolRegistry::new();
+    let mut opts = base_options.clone();
+    opts.system_prompt = Some(CLARIFY_SYSTEM.to_string());
+    opts.max_tool_rounds = 1;
+    let messages = vec![ChatMessage::text(
+        "user",
+        format!("{}\n\n{}", utc_now_context_line(), user_query.trim()),
+    )];
+    let outcome = complete_with_tools(http, &registry, hooks, guardrails, messages, &opts).await?;
+    Ok(outcome.content.unwrap_or_default())
+}
+
 /// Runs one chat completion (no tools) that rewrites `user_query` into a research brief.
 ///
 /// `base_options` should be the same API settings you use for the main agent (`base_url`, `api_key`,
@@ -589,6 +660,18 @@ mod tests {
     fn brief_mode_parse_env_defaults_to_llm() {
         assert_eq!(BriefMode::parse_env(None), BriefMode::Llm);
         assert_eq!(BriefMode::parse_env(Some("llm")), BriefMode::Llm);
+    }
+
+    #[test]
+    fn clarifying_json_keeps_four_questions_and_drops_a_bad_payload() {
+        let parsed = parse_clarifying_questions(
+            r#"{"questions":["Scope?","Depth?","Breadth?","Time?","Extra?"]}"#,
+        );
+        assert_eq!(parsed.len(), 4);
+        assert_eq!(parsed[0], "Scope?");
+        assert!(parse_clarifying_questions("not json").is_empty());
+        assert!(parse_clarifying_questions(r#"{"questions":"no"}"#).is_empty());
+        assert!(parse_clarifying_questions(r#"{"questions":["", "  "]}"#).is_empty());
     }
 
     #[test]

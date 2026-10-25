@@ -30,11 +30,17 @@ pub use agentic_crawl::{
 };
 pub use agents::babe::babe_agent_spec;
 pub use agents::charlotte::{charlotte_agent_spec, charlotte_quick_agent_spec};
+pub use agents::graph::{
+    NodeOutput, ResearchNode, WalkState, ask_clarifying_questions, next_research_node,
+    parse_plan_node, parse_read_node, research_browser_config, research_chat_options, run_graph,
+    run_research_graph,
+};
 pub use brief::{
     BriefGateDecision, BriefMode, BriefTaskShape, Citation, brief_search_context,
-    brief_task_process_hints, brief_task_process_hints_shaped,
+    brief_task_process_hints, brief_task_process_hints_shaped, clarifying_questions,
     expand_user_request_to_research_brief, expand_user_request_to_research_brief_shaped,
-    judge_brief_gate, parse_citations_fenced_json, should_expand_brief, should_expand_brief_llm,
+    judge_brief_gate, parse_citations_fenced_json, parse_clarifying_questions, should_expand_brief,
+    should_expand_brief_llm,
 };
 pub use browser::host::{BrowserHost, BrowserHostConfig};
 pub use browser::url_policy::UrlPolicy;
