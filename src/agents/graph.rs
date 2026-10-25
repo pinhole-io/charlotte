@@ -295,6 +295,7 @@ pub async fn run_research_graph(
     answers: &[(String, String)],
     cancel: CancellationToken,
     on_node: impl Fn(ResearchNode),
+    on_plan: impl Fn(&str),
 ) -> Result<String, CharlotteError> {
     let http = http_client_from_env().map_err(|err| CharlotteError::msg(err.to_string()))?;
     let options = research_chat_options(Some(cancel.clone()))?;
@@ -311,7 +312,7 @@ pub async fn run_research_graph(
         browser_config: &browser_config,
         browser: &mut browser,
     };
-    let result = walk_live(&mut live, &on_node).await;
+    let result = walk_live(&mut live, &on_node, &on_plan).await;
     if let Some(browser) = browser {
         let _ = browser.close().await;
     }
@@ -331,6 +332,7 @@ struct Live<'a> {
 async fn walk_live(
     live: &mut Live<'_>,
     on_node: &impl Fn(ResearchNode),
+    on_plan: &impl Fn(&str),
 ) -> Result<String, CharlotteError> {
     let mut state = WalkState::start();
     let mut prior = String::new();
@@ -340,6 +342,9 @@ async fn walk_live(
         }
         on_node(state.node);
         let output = live_step(live, state.node, &prior).await?;
+        if state.node == ResearchNode::Plan && !output.text.trim().is_empty() {
+            on_plan(&output.text);
+        }
         prior = join_prior(&prior, state.node, &output.text);
         match next_research_node(state, output.needs_context, output.thin) {
             Some(next) => state = next,
