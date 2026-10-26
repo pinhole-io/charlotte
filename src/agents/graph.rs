@@ -27,7 +27,7 @@ use crate::search::{SearchBackendKind, SearchConfig, web_search};
 use crate::tools::research_read_tools;
 
 const PLAN_ROUNDS: u32 = 1;
-const DEFAULT_TOOL_ROUNDS: u32 = 6;
+const DEFAULT_TOOL_ROUNDS: u32 = 250;
 const WRITE_ROUNDS: u32 = 2;
 
 const PLAN_INSTRUCTION: &str = "\
@@ -113,7 +113,7 @@ pub fn research_chat_options(
 
 /// Chat settings from explicit values. An empty host or model uses the default.
 ///
-/// An empty key returns an error. `tool_rounds` below 1 becomes 6.
+/// An empty key returns an error. `tool_rounds` below 1 becomes 250.
 pub fn research_chat_options_from(
     api_key: &str,
     base_url: &str,
