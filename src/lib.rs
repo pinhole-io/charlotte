@@ -32,8 +32,8 @@ pub use agents::babe::babe_agent_spec;
 pub use agents::charlotte::{charlotte_agent_spec, charlotte_quick_agent_spec};
 pub use agents::graph::{
     NodeOutput, ResearchNode, WalkState, ask_clarifying_questions, next_research_node,
-    parse_plan_node, parse_read_node, research_browser_config, research_chat_options, run_graph,
-    run_research_graph,
+    parse_plan_node, parse_read_node, research_browser_config, research_chat_options,
+    research_chat_options_from, run_graph, run_research_graph,
 };
 pub use brief::{
     BriefGateDecision, BriefMode, BriefTaskShape, Citation, brief_search_context,

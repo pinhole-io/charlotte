@@ -27,8 +27,7 @@ use crate::search::{SearchBackendKind, SearchConfig, web_search};
 use crate::tools::research_read_tools;
 
 const PLAN_ROUNDS: u32 = 1;
-const SEARCH_ROUNDS: u32 = 4;
-const READ_ROUNDS: u32 = 6;
+const DEFAULT_TOOL_ROUNDS: u32 = 6;
 const WRITE_ROUNDS: u32 = 2;
 
 const PLAN_INSTRUCTION: &str = "\
@@ -99,31 +98,63 @@ impl WalkState {
 }
 
 /// Chat settings from `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL`.
+///
+/// This path stays for Charlotte's own callers. The app passes
+/// [`research_chat_options_from`] when Settings hold the values.
 pub fn research_chat_options(
     cancel: Option<CancellationToken>,
 ) -> Result<ChatOptions, CharlotteError> {
     let key =
         std::env::var("OPENAI_API_KEY").map_err(|_| CharlotteError::msg("Set OPENAI_API_KEY."))?;
-    if key.trim().is_empty() {
+    let base_url = std::env::var("OPENAI_BASE_URL").unwrap_or_default();
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_default();
+    research_chat_options_from(&key, &base_url, &model, 4, cancel)
+}
+
+/// Chat settings from explicit values. An empty host or model uses the default.
+///
+/// An empty key returns an error. `tool_rounds` below 1 becomes 6.
+pub fn research_chat_options_from(
+    api_key: &str,
+    base_url: &str,
+    model: &str,
+    tool_rounds: u32,
+    cancel: Option<CancellationToken>,
+) -> Result<ChatOptions, CharlotteError> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
         return Err(CharlotteError::msg("Set OPENAI_API_KEY."));
     }
-    let base_url =
-        std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com".to_string());
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5.6-luna".to_string());
+    let base_url = filled(base_url, "https://api.openai.com");
+    let model = filled(model, "gpt-5.6-luna");
+    let tool_rounds = if tool_rounds < 1 {
+        DEFAULT_TOOL_ROUNDS
+    } else {
+        tool_rounds
+    };
     let reasoning_effort = model
         .to_ascii_lowercase()
         .contains("luna")
         .then(|| "none".to_string());
     Ok(ChatOptions {
         base_url,
-        api_key: secrecy::SecretString::from(key),
+        api_key: secrecy::SecretString::from(api_key),
         model,
         reasoning_effort,
-        max_tool_rounds: 4,
+        max_tool_rounds: tool_rounds,
         temperature: Some(0.2),
         cancel,
         ..Default::default()
     })
+}
+
+fn filled(value: &str, fallback: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 /// Headless browser settings. Private hosts stay blocked.
@@ -275,39 +306,48 @@ fn join_prior(prior: &str, node: ResearchNode, text: &str) -> String {
 /// Ask the clarifying questions for a Research rune. No browser tools are registered.
 pub async fn ask_clarifying_questions(
     query: &str,
-    cancel: CancellationToken,
+    options: &ChatOptions,
 ) -> Result<String, CharlotteError> {
     let http = http_client_from_env().map_err(|err| CharlotteError::msg(err.to_string()))?;
-    let options = research_chat_options(Some(cancel))?;
     crate::agents::brief::clarifying_questions(
         &http,
         &superglue::hooks::HookRegistry::new(),
         &superglue::guardrails::GuardrailRegistry::new(),
-        &options,
+        options,
         query,
     )
     .await
 }
 
 /// Run the live graph for one query and its clarifying answers.
+///
+/// `tool_rounds` caps search and read, including the context pass.
+/// Plan stays at 1 round. Write stays at 2 rounds.
 pub async fn run_research_graph(
     query: &str,
     answers: &[(String, String)],
     cancel: CancellationToken,
+    options: ChatOptions,
+    tool_rounds: u32,
     on_node: impl Fn(ResearchNode),
     on_plan: impl Fn(&str),
 ) -> Result<String, CharlotteError> {
     let http = http_client_from_env().map_err(|err| CharlotteError::msg(err.to_string()))?;
-    let options = research_chat_options(Some(cancel.clone()))?;
     let search = search_config_from_env()?;
     let browser_config = research_browser_config();
     let task = task_text(query, answers);
+    let tool_rounds = if tool_rounds < 1 {
+        DEFAULT_TOOL_ROUNDS
+    } else {
+        tool_rounds
+    };
     let mut browser = None;
     let mut live = Live {
         cancel: &cancel,
         task: &task,
         http: &http,
         options: &options,
+        tool_rounds,
         search: &search,
         browser_config: &browser_config,
         browser: &mut browser,
@@ -324,6 +364,7 @@ struct Live<'a> {
     task: &'a str,
     http: &'a HttpClient,
     options: &'a ChatOptions,
+    tool_rounds: u32,
     search: &'a SearchConfig,
     browser_config: &'a BrowserConfig,
     browser: &'a mut Option<BrowserHandle>,
@@ -461,7 +502,7 @@ async fn search_node(
         .map_err(|err| CharlotteError::msg(err.to_string()))?;
     let text = run_node(
         instruction,
-        SEARCH_ROUNDS,
+        live.tool_rounds,
         &registry,
         live.http,
         live.options,
@@ -491,7 +532,7 @@ async fn read_node(
     }
     let text = run_node(
         instruction,
-        READ_ROUNDS,
+        live.tool_rounds,
         &registry,
         live.http,
         live.options,
