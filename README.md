@@ -1,29 +1,54 @@
 # Charlotte
 
-Charlotte is a Rust SDK for a web-research agent.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust edition 2024](https://img.shields.io/badge/rust-edition%202024-orange.svg)](Cargo.toml)
+[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](Cargo.toml)
 
-It builds on [superglue](https://github.com/Bioto/superglue), [notepad](https://github.com/Bioto/notepad), and [playwright-rs](https://crates.io/crates/playwright-rs).
+**A web-research agent SDK.** Browser tools, search, and crawl run on a [SuperGlue](https://github.com/pinhole-io/superglue) loop.
 
-## Dependencies
+Charlotte launches Chromium through [playwright-rs](https://crates.io/crates/playwright-rs). It can also connect to a browser you already run. Optional pieces add [Notepad](https://github.com/pinhole-io/notepad) session memory, Qdrant, and document parsers.
 
-SuperGlue is required. Notepad, Qdrant, the CLI, and document parsers are optional.
+[Quick start](#quick-start) · [Install](#install) · [Search](#search-backend) · [URL policy](#url-policy) · [Examples](#examples)
 
-The default `full` feature keeps the standalone package behavior. Harn uses the focused `harn` feature without these optional components.
+## Contents
 
-## Sibling checkout layout
+- [Requirements](#requirements)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Features](#features)
+- [Cargo features](#cargo-features)
+- [How it fits together](#how-it-fits-together)
+- [Browser backends](#browser-backends)
+- [Search backend](#search-backend)
+- [URL policy](#url-policy)
+- [Host integration](#host-integration)
+- [Examples](#examples)
+- [Library](#library)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [License](#license)
 
-`Cargo.toml` depends on sibling crates with `path = "../superglue"` and `path = "../notepad"`.
+## Requirements
 
-Clone this repo and those two repos as siblings so the paths resolve:
+- Rust 1.88 or newer. `rust-version` in `Cargo.toml` follows playwright-rs.
+- Chromium that matches `playwright_rs::PLAYWRIGHT_VERSION`.
+- A sibling checkout of [superglue](https://github.com/pinhole-io/superglue). Cargo resolves `path = "../superglue"` even when optional features are off.
+- A sibling checkout of [notepad](https://github.com/pinhole-io/notepad) when you enable `notepad` or the default `full` feature.
+- `OPENAI_API_KEY` when you call a live model.
+
+## Install
+
+There is no crates.io package. Clone the three repositories as siblings.
 
 ```bash
 mkdir -p ~/src && cd ~/src
-git clone https://github.com/Bioto/charlotte.git
-git clone https://github.com/Bioto/superglue.git
-git clone https://github.com/Bioto/notepad.git
+git clone https://github.com/pinhole-io/charlotte.git
+git clone https://github.com/pinhole-io/superglue.git
+git clone https://github.com/pinhole-io/notepad.git
 ```
 
-You need this directory layout:
+You need this layout:
 
 ```text
 ~/src/
@@ -32,24 +57,23 @@ You need this directory layout:
   notepad/
 ```
 
-## Install
+Add the crate from git only after those paths exist on the build machine. The published `Cargo.toml` uses path dependencies.
 
-1. Install a Rust toolchain that meets the crate `rust-version` (**1.88+**, aligned with playwright-rs).
-2. Install Chromium that matches the bundled Playwright driver version (`playwright_rs::PLAYWRIGHT_VERSION`):
+Install Chromium for the Playwright driver pinned by `playwright-rs` 0.10.0:
 
 ```bash
-npx playwright@<version> install chromium
+npx playwright@1.58.2 install chromium
 ```
 
-3. Set an LLM API key when you run live examples (for example `OPENAI_API_KEY`).
+That version is `playwright_rs::PLAYWRIGHT_VERSION` for this lockfile. After you bump `playwright-rs`, install the version that constant reports.
 
 ## Quick start
 
-From the charlotte repo root:
+From this repository:
 
 ```bash
-cargo test
-cargo run --example charlotte_research -- "Summarize recent Rust release notes; cite URLs."
+export OPENAI_API_KEY=sk-...
+cargo run --example charlotte_research -- "Summarize recent Rust release notes. Cite URLs."
 ```
 
 Interactive research chat:
@@ -64,92 +88,119 @@ Show a headed browser window:
 cargo run --example charlotte_research -- --interactive --headed
 ```
 
-## What you get
+## Features
 
-- `charlotte_agent_spec` — a superglue `AgentSpec` for browser-backed research.
-- `BrowserHandle` — one isolated browser context, mutex-serialized for tool use.
-- `BrowserHost` — one server-owned browser process that creates isolated runtime sessions.
-- Tools via `register_charlotte_tools`: navigate, search, page read, crawl, extract, and more.
-- Optional `expand_user_request_to_research_brief` — turns a short user message into a research brief before tools run.
-- Session notepad tools for large tool-output offload during a run.
+| Feature | What you get |
+| --- | --- |
+| Research agent | `charlotte_agent_spec` is a SuperGlue `AgentSpec` for browser-backed research |
+| Browser session | `BrowserHandle` owns one isolated context. Page access is serialized. |
+| Browser host | `BrowserHost` owns one browser process and opens isolated sessions |
+| Tools | `register_charlotte_tools` adds navigate, search, page read, crawl, and extract |
+| Research brief | `expand_user_request_to_research_brief` turns a short request into a brief before tools run |
+| Session memory | Notepad tools store large tool output during a run. Requires the `notepad` feature. |
+| Ingest | Chunk, validate, and dedupe text. Document parsers require the `documents` feature. |
 
-For single-page reads after navigate, prefer `page_markdown`. Pass optional `focus` to prioritize matching sections. Default length is about 32k characters (`CHARLOTTE_MAX_MARKDOWN_CHARS`).
+For a single page after navigate, prefer `page_markdown`. Pass `focus` to rank matching sections. The default length is about 32,000 characters (`CHARLOTTE_MAX_MARKDOWN_CHARS`).
+
+## Cargo features
+
+| Feature | Default | Purpose |
+| --- | --- | --- |
+| `full` | yes | CLI, document parsers, Notepad, and Qdrant |
+| `cli` | through `full` | The `charlotte` binary |
+| `documents` | through `full` | PDF, Office, and zip parsers |
+| `notepad` | through `full` | Session notepad and offload hooks |
+| `qdrant` | through `full` | Qdrant client and tools |
+| `synthesize` | no | Notepad synthesis. Also enables `notepad`. |
+| `harn` | no | Browser and search surface for an embedding host. Omits the optional components. |
+
+```bash
+cargo check
+cargo check --no-default-features --features harn
+cargo test --features synthesize
+```
+
+## How it fits together
+
+```text
+Host / CLI / example
+        │
+        ▼
+    Charlotte
+        │
+        ├── SuperGlue     model loop and tools
+        ├── Playwright    Chromium, or an existing CDP browser
+        ├── SearXNG       default web search
+        └── Notepad       optional session memory
+```
+
+- Charlotte owns the browser session, the URL policy, and the research tools.
+- SuperGlue owns the model call and the tool loop.
+- A host registers tools, then runs `charlotte_agent_spec`.
 
 ## Browser backends
 
-Select the backend at runtime:
-
 | Value | Behavior |
-|-------|----------|
-| `playwright` | Launch Playwright-managed Chromium (default when `CHARLOTTE_BROWSER_BACKEND` is unset). |
-| `obscura` / `cdp` | Connect to an existing CDP endpoint. |
+| --- | --- |
+| `playwright` | Launch Playwright-managed Chromium. This is the default. |
+| `obscura` or `cdp` | Connect to an existing CDP endpoint. |
 
-Environment variables:
+```bash
+export CHARLOTTE_BROWSER_BACKEND=playwright
+export CHARLOTTE_CDP_ENDPOINT=ws://127.0.0.1:9222
+```
 
-- `CHARLOTTE_BROWSER_BACKEND=playwright|obscura|cdp`
-- `CHARLOTTE_CDP_ENDPOINT` — required for `obscura` / `cdp` (default local CDP endpoint applies when unset)
-
-Point `CHARLOTTE_CDP_ENDPOINT` at a Chromium DevTools endpoint you already run (for example `ws://127.0.0.1:9222` or `http://127.0.0.1:9222`).
+`CHARLOTTE_CDP_ENDPOINT` is required for `obscura` and `cdp`. Point it at a Chromium DevTools endpoint you already run. `ws://` and `http://` forms both work.
 
 ## Search backend
 
-`web_search` defaults to **SearXNG** over HTTP JSON (`GET /search?format=json`).
+`web_search` uses SearXNG JSON (`GET /search?format=json`) by default.
 
 | Variable | Default | Effect |
-|----------|---------|--------|
+| --- | --- | --- |
 | `CHARLOTTE_SEARCH_BACKEND` | `searxng` | `searxng` or `browser` |
 | `CHARLOTTE_SEARXNG_URL` | `http://127.0.0.1:18088` | SearXNG base URL |
-| `CHARLOTTE_SEARCH_URL_TEMPLATE` | DuckDuckGo HTML | Used when `CHARLOTTE_SEARCH_BACKEND=browser` |
+| `CHARLOTTE_SEARCH_URL_TEMPLATE` | DuckDuckGo HTML | Used when the backend is `browser` |
 | `CHARLOTTE_WEB_SEARCH_COOLDOWN_SECS` | `20` | Minimum gap between completed `web_search` calls |
 
-Set `CHARLOTTE_SEARCH_BACKEND=browser` to scrape HTML search results through the browser instead.
+Set `CHARLOTTE_SEARCH_BACKEND=browser` to scrape HTML search results through the browser. Navigation and page tools always use the browser. Run SearXNG yourself when you keep the default search backend.
 
-Navigation and page tools always use the browser backend. Run a SearXNG instance yourself if you keep the default search backend.
+## URL policy
 
-## URL policy (SSRF mitigation)
+**Warning:** `UrlPolicy` is an SSRF guard. Do not disable it on a production path.
 
-`UrlPolicy` and `BrowserConfig::url_policy` can restrict which hosts load:
-
-- Every policy accepts only HTTP and HTTPS URLs without user information.
-- Set `CHARLOTTE_ALLOW_HOST_SUFFIXES` to a comma-separated allow-list of host suffixes.
-- Set `CHARLOTTE_BLOCK_PRIVATE_IPS=1` to reject non-public IP literals and DNS results.
+- Every policy accepts only HTTP and HTTPS URLs. URLs with user information are rejected.
+- `CHARLOTTE_ALLOW_HOST_SUFFIXES` is a comma-separated allow-list of host suffixes.
+- `CHARLOTTE_BLOCK_PRIVATE_IPS=1` rejects non-public IP literals and DNS results. `true` is also accepted.
 - The browser applies the policy to navigation, redirects, subresources, and isolated contexts.
 
-Build a `UrlPolicy` in code, or call `apply_browser_config_from_env`. Combine this with network policy for multi-tenant deployments. Do not disable these guards for convenience in production paths.
+Build a `UrlPolicy` in code, or call `apply_browser_config_from_env`. Combine this with network policy for a multi-tenant deployment.
 
-## Harn integration
+Tracker and ad blocking is best-effort. It is not a security boundary.
 
-Build Harn with Charlotte's focused feature:
+## Host integration
+
+Build the focused surface:
 
 ```bash
 cargo check --no-default-features --features harn
 ```
 
-The host API exposes exact schemas through `charlotte_tool_specs`. Hosts can inspect bounded schemas before they create browser resources.
+`charlotte_tool_specs` returns the bounded schemas before a host creates browser resources.
 
-Harn initially exposes only `enable_headed_browser`. Approval opens one headed context and reveals `web_search` plus `agentic_crawl`.
+One `BrowserHost` owns the Playwright driver and the browser process. Open no page until the host activates Charlotte. Call `CharlotteToolSet::close` for each runtime. Close `BrowserHost` after every runtime session is closed.
 
-One `BrowserHost` owns the Playwright driver and browser process. Harn creates no page or conversation context before activation.
+A host such as Harn can start with one approval tool, `enable_headed_browser`. Approval opens one headed context and reveals `web_search` plus `agentic_crawl`. Each activated runtime gets its own cookies, storage, tabs, and crawl state. A child runtime cannot activate Charlotte. Activation stays in memory. A restart or a new conversation starts disabled.
 
-Each activated primary runtime gets separate cookies, storage, tabs, page state, and crawl guard state. Child runtimes cannot activate Charlotte.
+### Credential aliases
 
-Activation stays in memory. A restart, fork, or new conversation starts with Charlotte disabled.
-When the Harn TUI selects another conversation, Harn closes the previous context and resets that runtime to disabled.
+**Warning:** `agentic_crawl` can accept a `credential` alias. The model sees the alias. It does not see the secret.
 
-Call `CharlotteToolSet::close` for each runtime. Close `BrowserHost` after all runtime sessions close.
+The host implements `ToolRuntimeContext::resolve_credential`. The resolver returns named `CrawlInput` values and the exact HTTPS origins that may receive them. The host checks the requested origin before it reads a secret. Charlotte does not provide a vault.
 
-### Host-resolved credentials
+Charlotte applies these rules:
 
-`agentic_crawl` accepts an optional `credential` alias. The outer model sees
-the alias, but it does not see the values.
-
-A host enables this path by implementing
-`ToolRuntimeContext::resolve_credential`. The resolver returns named
-`CrawlInput` values and their exact allowed HTTPS origins.
-
-Charlotte applies these rules to a credential run:
-
-- The resolver runs inside the crawl timeout and cancellation boundary.
+- The resolver runs inside the crawl timeout and the cancellation boundary.
 - `credential` cannot be combined with `input_text` or `inputs`.
 - Every navigation and landed page must match an allowed origin.
 - Charlotte checks the current origin again before it types a value.
@@ -157,31 +208,22 @@ Charlotte applies these rules to a credential run:
 - Charlotte removes reflected values from page observations and tool results.
 - The sidecar actor rejects credential runs.
 
-The host must check the requested origin before it reads a secret. Charlotte
-does not provide a vault and does not depend on one.
+## Examples
 
-## Cargo examples
-
-| Example | Notes |
-|---------|-------|
-| `charlotte_research` | Browser tools + optional brief step (`OPENAI_API_KEY`, Chromium). |
-| `babe_chat` | Babe agent + Qdrant tools, no browser. |
-| `ingest_raw` | Ingest pipeline with raw text only — no API key or browser. |
-
-## Tests
+| Example | Needs | What it does |
+| --- | --- | --- |
+| `charlotte_research` | `OPENAI_API_KEY` and Chromium | Research chat with browser tools |
+| `babe_chat` | `OPENAI_API_KEY` and Qdrant | Babe agent and Qdrant tools. No browser. |
+| `ingest_raw` | nothing | Chunk raw text. No API key and no browser. |
 
 ```bash
-cargo test
-cargo test --no-default-features --features harn
+cargo run --example ingest_raw
+cargo run --example babe_chat
 ```
 
-- Unit tests cover chunking, crawl, URL policy, robots parsing, and related helpers.
-- Wiremock tests cover brief expansion, SearXNG mapping, and agentic crawl decisions without a live API key or Chrome.
-- Playwright and live CDP tests are `#[ignore]` by default. Run them with `cargo test -- --ignored` when browsers are installed.
+## Library
 
-## Library usage
-
-```rust,no_run
+```rust
 use charlotte::{
     BrowserHandle, ToolLlmContext, charlotte_agent_spec, http_client_from_env,
     register_charlotte_tools, search_config_from_env,
@@ -199,7 +241,7 @@ async fn demo() -> Result<(), Box<dyn std::error::Error>> {
     let guardrails = GuardrailRegistry::new();
     let base_opts = ChatOptions::new(
         "https://api.openai.com",
-        "sk-...",
+        std::env::var("OPENAI_API_KEY")?,
         "gpt-5.4-nano-2026-03-17-mini",
     );
     let llm = ToolLlmContext {
@@ -208,12 +250,11 @@ async fn demo() -> Result<(), Box<dyn std::error::Error>> {
         guardrails: guardrails.clone(),
         options: base_opts.clone(),
     };
-    let search_config = search_config_from_env()?;
     register_charlotte_tools(
         &tools,
         &browser,
         &Default::default(),
-        &search_config,
+        &search_config_from_env()?,
         &http,
         Some(llm),
     )
@@ -228,10 +269,56 @@ async fn demo() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Keep the API key in the environment. Do not commit it.
+
+## Configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `OPENAI_API_KEY` | Model key for live runs |
+| `OPENAI_BASE_URL` | Model host. The CLI default is `https://api.openai.com`. |
+| `OPENAI_MODEL` | Model id. The CLI default is `gpt-5.6-luna`. |
+| `CHARLOTTE_BRIEF_MODE` | `llm`, `heuristic`, `always`, or `never`. The default is `llm`. |
+| `CHARLOTTE_STORAGE_STATE_PATH` | Playwright storage-state JSON |
+| `CHARLOTTE_MAX_TEXT_CHARS` | `page_content` cap. The default is 48000. |
+| `CHARLOTTE_MAX_MARKDOWN_CHARS` | `page_markdown` cap. The default is 32000. |
+| `CHARLOTTE_MAX_HTML_BYTES` | HTML budget before Markdown conversion. The default is 600000. |
+| `HTTP_MAX_RETRIES` | Retries after a failed HTTP attempt. The default is 3. |
+| `HTTP_RETRY_INITIAL_MS` | First backoff delay. The default is 1000. |
+| `HTTP_RETRY_MAX_INTERVAL_MS` | Backoff cap. The default is 6000. |
+| `HTTP_RETRY_MULTIPLIER` | Backoff multiplier. The default is 3.0. |
+| `HTTP_QUOTA_PER_SECOND` | Optional global request rate. Use an integer of 1 or more. |
+| `QDRANT_API_KEY` | Qdrant key for the Qdrant examples |
+
+Browser and search variables are in [Browser backends](#browser-backends) and [Search backend](#search-backend).
+
+## Troubleshooting
+
+| What you see | What to do |
+| --- | --- |
+| `can't find crate superglue` or `notepad` | Clone those repositories next to this one. See [Install](#install). |
+| Missing `OPENAI_API_KEY` | Export the key before a live example. |
+| Playwright cannot find a browser | Install Chromium for `playwright_rs::PLAYWRIGHT_VERSION`. |
+| Search returns no rows | Start SearXNG at `CHARLOTTE_SEARXNG_URL`, or set `CHARLOTTE_SEARCH_BACKEND=browser`. |
+| `CHARLOTTE_CDP_ENDPOINT must be set` | Export the endpoint, or use `CHARLOTTE_BROWSER_BACKEND=playwright`. |
+| A page load is rejected | The URL policy blocked it. Check the scheme, the host suffix, and `CHARLOTTE_BLOCK_PRIVATE_IPS`. |
+| Ignored tests fail in the default suite | They do not run in `cargo test`. Pass `-- --ignored` when Chromium is installed. |
+
+## Development
+
+```bash
+cargo fmt
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+cargo test --no-default-features --features harn
+```
+
+- Unit tests cover chunking, crawl, URL policy, and robots parsing.
+- Wiremock tests cover brief expansion, SearXNG mapping, and agentic crawl decisions. They do not need a live key or Chrome.
+- Playwright and live CDP tests are `#[ignore]`. Run them with `cargo test -- --ignored` when the browsers are installed.
+
 ## License
 
-This project uses the **BSD-4-Clause** license. See `LICENSE`.
+The license is [MIT](LICENSE).
 
-Public materials that mention this software must display the acknowledgement in the LICENSE file.
-
-This license is GPL-incompatible.
+Keep the copyright notice and the permission notice in every copy.

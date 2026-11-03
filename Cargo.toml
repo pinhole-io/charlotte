@@ -1,9 +1,11 @@
 [package]
 name = "charlotte"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
-description = "Web research SDK: superglue agent \"Charlotte\" with Playwright-backed tools"
-license = "BSD-4-Clause"
+description = "Web-research agent SDK with browser tools, search, and crawl"
+license = "MIT"
+repository = "https://github.com/pinhole-io/charlotte"
+readme = "README.md"
 # Align with playwright-rs MSRV (see https://crates.io/crates/playwright-rs)
 rust-version = "1.88"
 

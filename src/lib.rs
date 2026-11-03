@@ -2,7 +2,7 @@
 //!
 //! Ingest pipeline (optional): [`ingest`] — extract text → chunk → validate → dedupe; then embed and upsert via [`utils::qdrant_ingest`].
 //!
-//! [superglue]: https://github.com/ (path dependency)
+//! [superglue]: https://github.com/pinhole-io/superglue
 //! [playwright-rs]: https://crates.io/crates/playwright-rs
 
 mod config;

@@ -1,4 +1,4 @@
-//! Session scratchpad integration via [notepad](https://github.com/Bioto/thestack/tree/main/projects/notepad).
+//! Session scratchpad integration via [notepad](https://github.com/pinhole-io/notepad).
 //!
 //! Charlotte browser tools can produce large payloads (especially
 //! `site_crawl_chunks`). Pair them with notepad tools so the model
