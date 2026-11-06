@@ -1,6 +1,6 @@
 //! Turn a short user request into a structured research brief (one LLM step, no browser tools).
 
-use std::time::Duration;
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -8,9 +8,9 @@ use superglue::chat::{ChatOptions, complete_with_tools};
 use superglue::guardrails::GuardrailRegistry;
 use superglue::hooks::HookRegistry;
 use superglue::http::HttpClient;
+use superglue::judge::{JudgeConfig, JudgeInput, JudgeOverrides, run as run_judge};
 use superglue::openai::ChatMessage;
 use superglue::providers::{ProviderCredentials, ProviderId};
-use superglue::systemone::{Choice, Questions, SystemOneRequest, clip_state, system_one};
 use superglue::tools::ToolRegistry;
 
 use crate::CharlotteError;
@@ -63,8 +63,6 @@ pub enum BriefMode {
     Always,
     Never,
 }
-
-const BRIEF_SYSTEM_ONE_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// Closed task shape for brief process hints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -397,60 +395,36 @@ fn typesafe_credentials(options: &ChatOptions) -> Option<ProviderCredentials> {
     env.has_key(ProviderId::TypeSafe).then_some(env)
 }
 
+fn brief_gate_config() -> &'static JudgeConfig {
+    static CONFIG: OnceLock<JudgeConfig> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        JudgeConfig::from_json(include_str!("../../judges/brief_gate.json"))
+            .expect("brief gate judge config")
+    })
+}
+
 async fn judge_brief_system_one(
     http: &HttpClient,
     credentials: &ProviderCredentials,
     user_text: &str,
 ) -> Result<BriefGateDecision, CharlotteError> {
-    let mut questions = Questions::new();
-    questions.insert(
-        "gate",
-        Choice::new("Should this web-research request be expanded into a research brief first?")
-            .option(
-                "brief",
-                "Complex: multi-part constraints, crawl, comparison, schema, or explicit planning.",
-            )
-            .option(
-                "direct",
-                "Simple. Answer with normal tool use. No brief needed.",
-            ),
-    );
-    questions.insert(
-        "shape",
-        Choice::new("What is the task shape for the research process?")
-            .option("crawl", "Site crawl or documentation coverage.")
-            .option("compare", "Compare entities or options.")
-            .option("listing", "On-site listing or find-all discovery.")
-            .option("open-web", "Open-web research without a named site."),
-    );
-    let request = SystemOneRequest::new(clip_state(user_text, 0), questions)
-        .with_model("typesafe:jev-latest");
-    let work = system_one(http, credentials, request);
-    let response = tokio::time::timeout(BRIEF_SYSTEM_ONE_TIMEOUT, work)
-        .await
-        .map_err(|_| CharlotteError::msg("brief system one timed out"))?
-        .map_err(|err| CharlotteError::msg(err.to_string()))?;
-    let gate = response
-        .answer("gate")
-        .and_then(|answer| answer.choice())
-        .ok_or_else(|| CharlotteError::msg("brief system one omitted gate"))?;
-    let expand = match gate {
-        "brief" => true,
-        "direct" => false,
-        other => {
-            return Err(CharlotteError::msg(format!(
-                "brief system one returned unknown gate: {other}"
-            )));
-        }
-    };
-    let shape_raw = response
-        .answer("shape")
-        .and_then(|answer| answer.choice())
-        .ok_or_else(|| CharlotteError::msg("brief system one omitted shape"))?;
+    let verdict = run_judge(
+        http,
+        credentials,
+        brief_gate_config(),
+        JudgeInput::text(user_text),
+        JudgeOverrides::default(),
+    )
+    .await
+    .map_err(|err| CharlotteError::msg(err.to_string()))?;
+    let expand = verdict
+        .bool("expand")
+        .ok_or_else(|| CharlotteError::msg("brief judge omitted expand"))?;
+    let shape_raw = verdict
+        .text("shape")
+        .ok_or_else(|| CharlotteError::msg("brief judge omitted shape"))?;
     let shape = BriefTaskShape::parse(shape_raw).ok_or_else(|| {
-        CharlotteError::msg(format!(
-            "brief system one returned unknown shape: {shape_raw}"
-        ))
+        CharlotteError::msg(format!("brief judge returned unknown shape: {shape_raw}"))
     })?;
     Ok(BriefGateDecision {
         expand,

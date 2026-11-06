@@ -1,0 +1,47 @@
+{
+  "id": "charlotte.brief_gate",
+  "model": "typesafe:jev-latest",
+  "timeout_ms": 400,
+  "state_chars": 240,
+  "on_error": "error",
+  "questions": {
+    "gate": {
+      "type": "choice",
+      "instructions": "Should this web-research request be expanded into a research brief first?",
+      "options": {
+        "brief": "Complex: multi-part constraints, crawl, comparison, schema, or explicit planning.",
+        "direct": "Simple. Answer with normal tool use. No brief needed."
+      }
+    },
+    "shape": {
+      "type": "choice",
+      "instructions": "What is the task shape for the research process?",
+      "options": {
+        "crawl": "Site crawl or documentation coverage.",
+        "compare": "Compare entities or options.",
+        "listing": "On-site listing or find-all discovery.",
+        "open-web": "Open-web research without a named site."
+      }
+    }
+  },
+  "outputs": [
+    {
+      "kind": "choice",
+      "name": "expand",
+      "from": "gate",
+      "map": {
+        "brief": true,
+        "direct": false
+      },
+      "on_unknown": "error",
+      "required": true
+    },
+    {
+      "kind": "choice",
+      "name": "shape",
+      "from": "shape",
+      "on_unknown": "error",
+      "required": true
+    }
+  ]
+}
