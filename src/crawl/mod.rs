@@ -4,6 +4,7 @@
 //! [`crate::browser::AutomationProfile::Stealth`] for best-effort mitigation.
 
 pub mod agentic;
+pub mod capacity;
 pub(crate) mod loopguard;
 pub(crate) mod robots;
 pub mod scrape_many;

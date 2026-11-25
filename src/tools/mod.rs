@@ -376,7 +376,7 @@ pub fn research_read_tools(
             policy: config.url_policy.clone(),
         }),
         Arc::new(ScrapeManyTool {
-            browser: Arc::clone(&browser),
+            pool: Arc::new(LazyBrowserPool::new(config.clone(), None)),
             guard_state: Arc::clone(&guard_state),
         }),
         Arc::new(AgenticCrawlTool {
@@ -398,9 +398,9 @@ pub fn research_read_tools(
 
 /// Register all Charlotte browser tools on `registry`.
 ///
-/// Returns the lazily-initialized `scrape_many` browser pool (unused until something
-/// still calls [`LazyBrowserPool::workers`]). Callers must call [`LazyBrowserPool::close`]
-/// on it once done with the registry.
+/// Returns the `scrape_many` browser pool. The pool starts on the first scrape.
+/// The default size is one browser. Callers must call [`LazyBrowserPool::close`]
+/// once they are done with the registry. Session tools keep `handle`.
 pub async fn register_charlotte_tools(
     registry: &ToolRegistry,
     handle: &BrowserHandle,
@@ -432,7 +432,7 @@ pub async fn register_charlotte_tools(
     register_browser_tool(
         registry,
         Arc::new(ScrapeManyTool {
-            browser: Arc::clone(&h),
+            pool: Arc::clone(&pool),
             guard_state: Arc::clone(&guard_state),
         }),
         Arc::clone(&guard_state),

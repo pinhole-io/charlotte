@@ -7,6 +7,7 @@ pub mod host;
 pub mod obscura;
 pub mod playwright;
 pub mod pool;
+pub(crate) mod resilient_pool;
 pub(crate) mod url_policy;
 
 use std::path::PathBuf;

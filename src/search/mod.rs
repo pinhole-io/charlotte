@@ -125,9 +125,6 @@ async fn searxng_web_search(
     max_results: usize,
 ) -> Result<Value, CharlotteError> {
     let max_results = max_results.clamp(1, 20);
-    if query_contains_site_operator(query) {
-        return Ok(site_operator_unsupported_response(query));
-    }
 
     let _permit = config
         .throttle
@@ -187,22 +184,6 @@ async fn searxng_web_search(
         );
     }
     Ok(out)
-}
-
-fn query_contains_site_operator(query: &str) -> bool {
-    query.to_ascii_lowercase().contains("site:")
-}
-
-fn site_operator_unsupported_response(query: &str) -> Value {
-    json!({
-        "ok": false,
-        "error": "site_operator_unsupported",
-        "backend": "searxng",
-        "query": query,
-        "results": [],
-        "message": "SearXNG uses Bing, which does not support the site: search operator.",
-        "hint": "Omit site:. Search with the topic words. For a known URL, use navigate + page_markdown or list_links.",
-    })
 }
 
 async fn circuit_open_remaining(throttle: &WebSearchThrottle) -> Option<Duration> {
@@ -318,13 +299,6 @@ fn map_searxng_row(row: Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn site_operator_detected_case_insensitive() {
-        assert!(query_contains_site_operator("site:apple.com foo"));
-        assert!(query_contains_site_operator("SITE:Apple.com"));
-        assert!(!query_contains_site_operator("apple official twitter"));
-    }
 
     #[test]
     fn build_searxng_search_url_encodes_query() {

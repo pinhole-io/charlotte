@@ -28,7 +28,11 @@ jig = { path = "../jig" }
 notepad = { path = "../notepad", default-features = false, features = ["superglue"], optional = true }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time", "net", "signal"] }
+axum = { version = "0.8", optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, default-features = false, features = ["std", "fmt", "env-filter", "ansi"] }
 tracing = "0.1"
 url = "2"
 urlencoding = "2"
@@ -45,6 +49,7 @@ wiremock = "0.6"
 default = ["full"]
 full = ["cli", "documents", "notepad", "qdrant"]
 harn = []
+serve = ["dep:axum", "dep:tower", "dep:http-body-util", "dep:tracing-subscriber"]
 cli = ["dep:clap"]
 documents = ["dep:calamine", "dep:docx-rs", "dep:pdf-extract", "dep:zip"]
 notepad = ["dep:notepad"]
@@ -55,6 +60,11 @@ synthesize = ["notepad", "notepad/synthesize"]
 name = "charlotte"
 path = "src/main.rs"
 required-features = ["full"]
+
+[[bin]]
+name = "charlotte-crawl"
+path = "src/bin/charlotte_crawl.rs"
+required-features = ["serve"]
 
 [[example]]
 name = "charlotte_research"

@@ -4,8 +4,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 
-use crate::browser::pool::{BrowserPool, DEFAULT_BROWSER_POOL_CAP};
+use crate::browser::pool::DEFAULT_BROWSER_POOL_CAP;
 use crate::browser::{BrowserConfig, BrowserHandle, NavigateOptions};
+use crate::crawl::capacity::{CrawlCapacityConfig, CrawlRuntime, CrawlScrapeOptions};
 use crate::error::CharlotteError;
 
 pub const SCRAPE_MANY_MAX_URLS: usize = 20;
@@ -49,88 +50,90 @@ impl ScrapeManyOptions {
     }
 }
 
-#[derive(Clone)]
-struct PoolWorker {
-    handle: BrowserHandle,
-}
-
-struct PoolRuntime {
-    workers: Arc<Vec<PoolWorker>>,
-}
-
-#[derive(Clone)]
+/// Browser pool for `scrape_many`. Chromium starts on the first scrape.
+///
+/// The default size is one browser. `CHARLOTTE_BROWSER_POOL_SIZE` can raise it.
+/// Call [`Self::close`] when the owner is done. Drop also closes a started pool.
 pub struct LazyBrowserPool {
     config: BrowserConfig,
-    size: usize,
-    runtime: Arc<Mutex<Option<PoolRuntime>>>,
+    capacity: CrawlCapacityConfig,
+    runtime: Mutex<Option<Arc<CrawlRuntime>>>,
 }
 
 impl LazyBrowserPool {
+    /// Build a pool. `size` sets the browser count before environment overrides.
+    /// `None` keeps the agent default of one browser.
+    #[must_use]
     pub fn new(config: BrowserConfig, size: Option<usize>) -> Self {
-        let size = size.unwrap_or(1).max(1);
+        let mut capacity = CrawlCapacityConfig::agent();
+        if let Some(size) = size {
+            capacity.browser_pool_size = size.max(1);
+        }
         Self {
             config,
-            size,
-            runtime: Arc::new(Mutex::new(None)),
+            capacity,
+            runtime: Mutex::new(None),
         }
     }
 
+    /// Configured browser count before the pool starts.
+    #[must_use]
     pub fn size(&self) -> usize {
-        self.size
+        self.capacity.browser_pool_size
     }
 
-    async fn workers(&self) -> Result<Arc<Vec<PoolWorker>>, CharlotteError> {
+    /// HTML byte budget stored on the browser config.
+    #[must_use]
+    pub fn max_html_bytes(&self) -> usize {
+        self.config.max_html_bytes
+    }
+
+    /// Markdown character budget stored on the browser config.
+    #[must_use]
+    pub fn max_markdown_chars(&self) -> usize {
+        self.config.max_markdown_chars
+    }
+
+    async fn runtime(&self) -> Result<Arc<CrawlRuntime>, CharlotteError> {
         let mut guard = self.runtime.lock().await;
         if guard.is_none() {
-            let pool = BrowserPool::from_config(self.config.clone(), Some(self.size)).await?;
-            let workers = pool
-                .handles()
-                .iter()
-                .cloned()
-                .map(|handle| PoolWorker { handle })
-                .collect::<Vec<_>>();
-            *guard = Some(PoolRuntime {
-                workers: Arc::new(workers),
-            });
+            let capacity = self.capacity.clone().apply_env()?;
+            let runtime = CrawlRuntime::start(capacity, self.config.clone()).await?;
+            *guard = Some(Arc::new(runtime));
         }
-        // Safe: initialized just above when absent.
-        Ok(guard
-            .as_ref()
-            .map(|r| Arc::clone(&r.workers))
-            .unwrap_or_else(|| Arc::new(Vec::new())))
+        Ok(Arc::clone(guard.as_ref().expect("runtime stored above")))
     }
 
-    pub async fn default_limits(&self) -> Result<(usize, usize), CharlotteError> {
-        let workers = self.workers().await?;
-        let Some(first) = workers.first() else {
-            return Err(CharlotteError::msg("parallel scrape pool has no workers"));
-        };
-        let max_html = first.handle.max_html_bytes_limit().await?;
-        let max_markdown = first.handle.max_markdown_chars_limit().await?;
-        Ok((max_html, max_markdown))
-    }
-
-    /// Close every browser worker if the pool was ever initialized (idempotent no-op otherwise).
-    ///
-    /// Must be called once the pool's owner is done with it — the pool otherwise holds one
-    /// CDP connection (and, for the Playwright backend, one Node driver process) per worker
-    /// for as long as the process runs.
+    /// Close the pool if a scrape started it. A second call does nothing.
     pub async fn close(&self) -> Result<(), CharlotteError> {
         let runtime = self.runtime.lock().await.take();
-        let Some(runtime) = runtime else {
-            return Ok(());
+        if let Some(runtime) = runtime {
+            runtime.close().await?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for LazyBrowserPool {
+    fn drop(&mut self) {
+        let Ok(mut guard) = self.runtime.try_lock() else {
+            return;
         };
-        let mut first_err = None;
-        for worker in runtime.workers.iter() {
-            if let Err(e) = worker.handle.close().await {
-                tracing::warn!(target: "charlotte::scrape_many", error = %e, "lazy browser pool: worker close failed");
-                first_err.get_or_insert(e);
+        let Some(runtime) = guard.take() else {
+            return;
+        };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            if let Err(error) = runtime.close().await {
+                tracing::warn!(
+                    target: "charlotte::scrape_many",
+                    %error,
+                    "lazy browser pool close failed"
+                );
             }
-        }
-        match first_err {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        });
     }
 }
 
@@ -198,11 +201,123 @@ pub async fn scrape_many(
     requests: Vec<ScrapeRequest>,
     options: ScrapeManyOptions,
 ) -> Result<Value, CharlotteError> {
-    let workers = pool.workers().await?;
-    let Some(worker) = workers.first() else {
-        return Err(CharlotteError::msg("parallel scrape pool has no workers"));
+    let runtime = pool.runtime().await?;
+    let used_concurrency = options.max_concurrency.max(1).min(SCRAPE_MAX_CONCURRENCY);
+    let permit_limit = Arc::new(Semaphore::new(used_concurrency));
+    let mut jobs = JoinSet::new();
+
+    for (idx, request) in requests.into_iter().enumerate() {
+        let Some(permit) = permit_limit.clone().acquire_owned().await.ok() else {
+            return Err(CharlotteError::msg(
+                "failed to acquire scrape concurrency slot",
+            ));
+        };
+        let runtime = Arc::clone(&runtime);
+        let opts = options.clone();
+        jobs.spawn(async move {
+            let _permit = permit;
+            (idx, scrape_through_runtime(runtime, request, opts).await)
+        });
+    }
+
+    let mut ordered = Vec::new();
+    while let Some(joined) = jobs.join_next().await {
+        match joined {
+            Ok((idx, row)) => ordered.push((idx, row)),
+            Err(err) => ordered.push((
+                usize::MAX,
+                json!({
+                    "ok": false,
+                    "error": "task_join_error",
+                    "message": err.to_string(),
+                }),
+            )),
+        }
+    }
+    ordered.sort_by_key(|(idx, _)| *idx);
+    let mut results = ordered.into_iter().map(|(_, row)| row).collect::<Vec<_>>();
+    let truncated_total = apply_total_text_cap(&mut results, options.max_total_text_chars);
+
+    Ok(json!({
+        "ok": true,
+        "max_concurrency": used_concurrency,
+        "results": results,
+        "output": {
+            "truncated": truncated_total,
+            "max_total_text_chars": options.max_total_text_chars,
+        }
+    }))
+}
+
+async fn scrape_through_runtime(
+    runtime: Arc<CrawlRuntime>,
+    request: ScrapeRequest,
+    options: ScrapeManyOptions,
+) -> Value {
+    let started = std::time::Instant::now();
+    let mut scrape_options = CrawlScrapeOptions {
+        focus: options.focus.clone(),
+        max_html_bytes: options.max_html_bytes,
+        max_markdown_chars: options.max_markdown_chars,
+        navigate: options.navigate_options.clone(),
     };
-    scrape_many_on(&worker.handle, requests, options).await
+    if scrape_options.focus.as_deref().is_some_and(str::is_empty) {
+        scrape_options.focus = None;
+    }
+    let row = match runtime
+        .scrape_value(&request.url, runtime.deadline(), scrape_options)
+        .await
+    {
+        Ok(value) => scrape_row(&request.url, value),
+        Err(CharlotteError::Overloaded {
+            reason,
+            retry_after,
+        }) => json!({
+            "url": request.url,
+            "ok": false,
+            "error": "overloaded",
+            "reason": reason.as_str(),
+            "retry_after_secs": retry_after.as_secs(),
+        }),
+        Err(CharlotteError::DeadlineExceeded { .. }) => json!({
+            "url": request.url,
+            "ok": false,
+            "error": "deadline_exceeded",
+        }),
+        Err(err) => json!({
+            "url": request.url,
+            "ok": false,
+            "error": "scrape_failed",
+            "message": err.to_string(),
+        }),
+    };
+    let ok = row.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    tracing::info!(
+        target: "charlotte::scrape_many",
+        url = %request.url,
+        ok,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "scrape url finished"
+    );
+    row
+}
+
+fn scrape_row(url: &str, value: Value) -> Value {
+    if value.get("ok").and_then(Value::as_bool) == Some(false) {
+        return value;
+    }
+    json!({
+        "url": url,
+        "ok": true,
+        "requested_url": value.get("requested_url").cloned().unwrap_or(Value::Null),
+        "final_url": value.get("final_url").cloned().unwrap_or(Value::Null),
+        "status": value.get("status").cloned().unwrap_or(Value::Null),
+        "title": value.get("title").cloned().unwrap_or(Value::Null),
+        "markdown": value.get("markdown").cloned().unwrap_or_else(|| json!("")),
+        "truncated": value.get("truncated").cloned().unwrap_or(json!(false)),
+        "blocked": value.get("blocked").cloned().unwrap_or(json!(false)),
+        "blocked_reason": value.get("blocked_reason").cloned().unwrap_or(Value::Null),
+    })
 }
 
 /// Fan-out scrapes across isolated tabs on a single browser connection.

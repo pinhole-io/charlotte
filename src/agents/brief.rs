@@ -141,12 +141,12 @@ pub fn brief_search_context(config: &SearchConfig) -> String {
             "### Active configuration (runtime)\n\
              - `CHARLOTTE_SEARCH_BACKEND`: {backend_id}\n\
              - SearXNG URL: {}\n\
-             - General web engine: Bing (via SearXNG JSON API)\n\
+             - Engines: whatever that SearXNG instance enables\n\
              - `web_search` cooldown: ~{cooldown_secs}s between completed calls (serialized; parallel calls queue)\n\
              \n\
              ### web_search on this backend\n\
              - Use the pages the search returns. A page about the same term in another field is a source.\n\
-             - Do NOT plan `site:` queries — Charlotte rejects them before the search.\n\
+             - `site:` is a host plus the topic (`site:example.com topic`). Do not put a path after the host.\n\
              - Plan 1–2 `web_search` calls per agent round, not 3–4 parallel variants.\n\
              - Empty results, `unresponsive_engines`, or `searxng_circuit_open`: stop retrying the same query; pivot to browser tools.\n\
              \n\
@@ -183,7 +183,7 @@ pub fn brief_search_context(config: &SearchConfig) -> String {
 pub fn brief_task_process_hints(shape: BriefTaskShape, config: &SearchConfig) -> String {
     let search_note = match config.backend {
         SearchBackendKind::Searxng => {
-            "Use the returned pages, including another field for the same term. No site:."
+            "Use the returned pages, including another field for the same term. `site:host` is allowed; do not add a path."
         }
         SearchBackendKind::Browser => "web_search may use site:example.com with root domain only.",
     };

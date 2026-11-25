@@ -15,6 +15,8 @@ pub mod ingest;
 #[cfg(feature = "notepad")]
 pub mod scratchpad;
 pub mod search;
+#[cfg(feature = "serve")]
+pub mod serve;
 pub mod tools;
 #[cfg(feature = "qdrant")]
 pub mod utils;
@@ -52,6 +54,7 @@ pub use config::{
     apply_browser_config_from_env, browser_backend_kind_from_env, cdp_endpoint_from_env,
     client_config_from_env, http_client_from_env, search_config_from_env, url_policy_from_env,
 };
+pub use crawl::capacity::{CrawlCapacityConfig, CrawlRuntime};
 pub use crawl::scrape_many::{
     LazyBrowserPool, SCRAPE_MANY_DEFAULT_MAX_TOTAL_TEXT_CHARS, SCRAPE_MANY_MAX_URLS,
     ScrapeManyOptions, ScrapeRequest, apply_total_text_cap, clamp_concurrency, scrape_many,

@@ -83,18 +83,15 @@ pub struct PreparedHtml {
     pub title: Option<String>,
 }
 
-/// Extract `<body>` and `<title>` from a full HTML document; strip script/style (MarkItDown parity).
+/// Extract the main content region and `<title>` from a full HTML document.
+///
+/// Prefers `main`, `[role=main]`, `#mainContent`, `#content`, then `article`.
+/// Drops skip links and navigation chrome. Strips script and style.
 pub fn prepare_body_html_from_document(html: &str) -> PreparedHtml {
     let doc = Html::parse_document(html);
     let title = document_title(&doc);
-    let body_sel = Selector::parse("body").expect("valid body selector");
-    let body_html = doc
-        .select(&body_sel)
-        .next()
-        .map(|el| el.html())
-        .unwrap_or_else(|| html.to_string());
     PreparedHtml {
-        body_html: strip_script_and_style_tags(&body_html),
+        body_html: content_region_html(&doc, html),
         title,
     }
 }
@@ -107,10 +104,11 @@ pub fn document_html_to_markdown(
     max_markdown_chars: usize,
 ) -> Result<PageMarkdownResult, CharlotteError> {
     let truncated_doc = truncate_str_by_bytes(html, max_html_bytes);
-    let prepared = prepare_body_html_from_document(truncated_doc);
+    let title = prepare_body_html_from_document(truncated_doc).title;
+    // Pass the full document so main-content extraction runs once.
     body_html_to_markdown(
-        &prepared.body_html,
-        prepared.title.as_deref(),
+        truncated_doc,
+        title.as_deref(),
         focus,
         max_html_bytes,
         max_markdown_chars,
@@ -127,7 +125,8 @@ pub fn body_html_to_markdown(
 ) -> Result<PageMarkdownResult, CharlotteError> {
     let truncated = truncate_str_by_bytes(body_html, max_html_bytes);
     let html_truncated = truncated.len() < body_html.len();
-    let cleaned = strip_script_and_style_tags(truncated);
+    let doc = Html::parse_document(truncated);
+    let cleaned = content_region_html(&doc, truncated);
     let md = convert_html_to_markdown(&cleaned)?;
     let (markdown, md_truncated, cleanup) = apply_focus_and_limit(&md, focus, max_markdown_chars);
     Ok(PageMarkdownResult {
@@ -312,9 +311,81 @@ fn apply_focus_and_limit(
     )
 }
 
+/// Minimum alphanumeric characters before a main region replaces the body.
+const MIN_MAIN_REGION_ALNUM: usize = 80;
+
+const MAIN_REGION_SELECTORS: &[&str] = &[
+    "main",
+    "[role=\"main\"]",
+    "#mainContent",
+    "#content",
+    "article",
+];
+
+/// HTML of the page content: the main region when it has real text, otherwise the body.
+///
+/// Skip links and `nav` / `aside` chrome are removed. Script and style tags are removed.
+fn content_region_html(doc: &Html, fallback: &str) -> String {
+    let raw = main_region_inner_html(doc).unwrap_or_else(|| body_inner_html(doc, fallback));
+    let without_chrome = strip_nav_and_aside(&raw);
+    strip_skip_links(&strip_script_and_style_tags(&without_chrome))
+}
+
+fn main_region_inner_html(doc: &Html) -> Option<String> {
+    for selector in MAIN_REGION_SELECTORS {
+        let Ok(sel) = Selector::parse(selector) else {
+            continue;
+        };
+        if let Some(el) = doc.select(&sel).next() {
+            let inner = el.inner_html();
+            let alnum = inner.chars().filter(|c| c.is_alphanumeric()).count();
+            if alnum >= MIN_MAIN_REGION_ALNUM {
+                return Some(inner);
+            }
+        }
+    }
+    None
+}
+
+fn body_inner_html(doc: &Html, fallback: &str) -> String {
+    let body_sel = Selector::parse("body").expect("valid body selector");
+    doc.select(&body_sel)
+        .next()
+        .map(|el| el.inner_html())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Drop `nav` and `aside` subtrees from HTML that scraper already serialized.
+fn strip_nav_and_aside(html: &str) -> String {
+    let doc = Html::parse_document(html);
+    let Ok(sel) = Selector::parse("nav, aside, [role=\"navigation\"], [role=\"banner\"]") else {
+        return html.to_string();
+    };
+    let body = body_inner_html(&doc, html);
+    let mut chunks: Vec<String> = doc.select(&sel).map(|el| el.html()).collect();
+    chunks.sort_by_key(|chunk| std::cmp::Reverse(chunk.len()));
+    let mut out = body;
+    for chunk in chunks {
+        if chunk.is_empty() {
+            continue;
+        }
+        out = out.replace(&chunk, "");
+    }
+    out
+}
+
+fn strip_skip_links(html: &str) -> String {
+    static SKIP: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let skip = SKIP.get_or_init(|| {
+        Regex::new(r#"(?is)<a\b[^>]*\bhref\s*=\s*["']#[^"']*["'][^>]*>\s*skip\s+to\b[^<]*</a>"#)
+            .expect("skip link regex")
+    });
+    skip.replace_all(html, "").to_string()
+}
+
 fn convert_html_to_markdown(html: &str) -> Result<String, CharlotteError> {
     let converter = HtmlToMarkdown::builder()
-        .skip_tags(vec!["script", "style", "noscript"])
+        .skip_tags(vec!["script", "style", "noscript", "nav", "aside"])
         .options(Options {
             heading_style: HeadingStyle::Atx,
             ..Default::default()
@@ -445,6 +516,26 @@ mod tests {
         let (md, _) = html_to_markdown_limited(html, 10_000).unwrap();
         assert!(md.contains("Title"), "markdown: {md}");
         assert!(md.contains("Hello world"), "markdown: {md}");
+    }
+
+    #[test]
+    fn keeps_main_content_and_drops_skip_nav() {
+        let html = r##"<!DOCTYPE html><html><body>
+            <a href="#mainContent">Skip to main content</a>
+            <a href="#sectionNav">Skip to section navigation</a>
+            <nav id="sectionNav"><a href="/news">Newsroom</a></nav>
+            <main id="mainContent">
+                <a href="#sectionNav">Skip to section navigation</a>
+                <h1>Intuit Reports Results</h1><p>Revenue grew in the quarter.</p>
+            </main>
+            <footer>Copyright Intuit</footer>
+        </body></html>"##;
+        let (md, _) = html_to_markdown_limited(html, 10_000).unwrap();
+        assert!(md.contains("Intuit Reports Results"), "{md}");
+        assert!(md.contains("Revenue grew"), "{md}");
+        assert!(!md.to_ascii_lowercase().contains("skip to"), "{md}");
+        assert!(!md.contains("Newsroom"), "{md}");
+        assert!(!md.contains("Copyright"), "{md}");
     }
 
     #[test]

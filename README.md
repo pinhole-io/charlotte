@@ -215,10 +215,12 @@ Charlotte applies these rules:
 | `charlotte_research` | `OPENAI_API_KEY` and Chromium | Research chat with browser tools |
 | `babe_chat` | `OPENAI_API_KEY` and Qdrant | Babe agent and Qdrant tools. No browser. |
 | `ingest_raw` | nothing | Chunk raw text. No API key and no browser. |
+| `crawl_load.sh` | Chromium, curl, and python3 | Starts `charlotte-crawl` and checks admission, auth, and rejected URLs. |
 
 ```bash
 cargo run --example ingest_raw
 cargo run --example babe_chat
+./examples/crawl_load.sh
 ```
 
 ## Library
@@ -277,7 +279,7 @@ Keep the API key in the environment. Do not commit it.
 | --- | --- |
 | `OPENAI_API_KEY` | Model key for live runs |
 | `OPENAI_BASE_URL` | Model host. The CLI default is `https://api.openai.com`. |
-| `OPENAI_MODEL` | Model id. The CLI default is `gpt-5.6-luna`. |
+| `OPENAI_MODEL` | Model id. The CLI default is `gpt-6-luna`. Reasoning effort is `high`. |
 | `CHARLOTTE_BRIEF_MODE` | `llm`, `heuristic`, `always`, or `never`. The default is `llm`. |
 | `CHARLOTTE_STORAGE_STATE_PATH` | Playwright storage-state JSON |
 | `CHARLOTTE_MAX_TEXT_CHARS` | `page_content` cap. The default is 48000. |

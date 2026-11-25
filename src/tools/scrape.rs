@@ -5,17 +5,17 @@ use serde_json::{Value, json};
 
 use superglue::tools::{Tool, ToolInvokeError, ToolSpec};
 
-use crate::browser::{BrowserHandle, tool_error};
+use crate::browser::tool_error;
 use crate::crawl::loopguard::{SharedGuardState, blocked_target_response};
 use crate::crawl::scrape_many::{
-    SCRAPE_MANY_DEFAULT_MAX_TOTAL_TEXT_CHARS, ScrapeManyOptions, ScrapeRequest, clamp_concurrency,
-    scrape_many_on, validate_urls,
+    LazyBrowserPool, SCRAPE_MANY_DEFAULT_MAX_TOTAL_TEXT_CHARS, ScrapeManyOptions, ScrapeRequest,
+    clamp_concurrency, scrape_many, validate_urls,
 };
 use crate::ingest::markdown::clamp_agent_markdown_chars;
 use crate::tools::names::SCRAPE_MANY;
 
 pub(crate) struct ScrapeManyTool {
-    pub(crate) browser: Arc<BrowserHandle>,
+    pub(crate) pool: Arc<LazyBrowserPool>,
     pub(crate) guard_state: SharedGuardState,
 }
 
@@ -101,18 +101,10 @@ impl Tool for ScrapeManyTool {
             }));
         }
 
-        let pool_size = 1;
+        let pool_size = self.pool.size();
         let max_concurrency = clamp_concurrency(max_concurrency_arg, pool_size);
-        let default_html = self
-            .browser
-            .max_html_bytes_limit()
-            .await
-            .map_err(tool_error)?;
-        let default_markdown = self
-            .browser
-            .max_markdown_chars_limit()
-            .await
-            .map_err(tool_error)?;
+        let default_html = self.pool.max_html_bytes();
+        let default_markdown = self.pool.max_markdown_chars();
         let max_markdown_chars = clamp_agent_markdown_chars(
             arguments
                 .get("max_markdown_chars")
@@ -128,7 +120,7 @@ impl Tool for ScrapeManyTool {
             max_total_text_chars,
             pool_size,
         );
-        let mut result = scrape_many_on(&self.browser, allowed, options)
+        let mut result = scrape_many(&self.pool, allowed, options)
             .await
             .map_err(tool_error)?;
         if !blocked_rows.is_empty()

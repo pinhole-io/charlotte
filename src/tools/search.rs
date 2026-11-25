@@ -16,11 +16,11 @@ pub(crate) fn web_search_spec(max_results: usize) -> ToolSpec {
     ToolSpec {
         name: SEARCH.to_string(),
         description: Some(
-            "Run a web search via SearXNG JSON API (default, Bing) or DuckDuckGo HTML when CHARLOTTE_SEARCH_BACKEND=browser. Returns { title, url, snippet } rows. \
+            "Run a web search via the SearXNG JSON API, or DuckDuckGo HTML when CHARLOTTE_SEARCH_BACKEND=browser. Returns { title, url, snippet } rows. \
              Prefer answering from titles and snippets when they already contain the fact. \
              When a page body is needed, use fetch on a result URL when that tool is registered. \
              A page about the same term in another field is still a source. \
-             Default SearXNG/Bing does NOT support `site:`. With the browser backend, `site:` is a root domain only (`site:example.com topic`); never `site:domain/path`."
+             `site:` is a host plus the topic (`site:example.com topic`). Do not put a path after the host."
                 .to_string(),
         ),
         static_tool: false,
@@ -31,7 +31,7 @@ pub(crate) fn web_search_spec(max_results: usize) -> ToolSpec {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": MAX_SEARCH_QUERY_CHARS,
-                    "description": "Search query. On SearXNG/Bing, do not use `site:`. A result about the same term in another field is still a source."
+                    "description": "Search query. `site:` is a host plus the topic (`site:example.com topic`), with no path. A result about the same term in another field is still a source."
                 },
                 "max_results": { "type": "integer", "minimum": 1, "maximum": max_results, "description": "Max results", "default": 8.min(max_results) }
             },

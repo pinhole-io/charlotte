@@ -96,15 +96,18 @@ pub async fn fetch_url(
         return Ok(failure("response too large", None));
     }
     let raw = String::from_utf8_lossy(&body);
-    let content_type = if looks_like_html(None, &raw) {
+    let html = looks_like_html(None, &raw);
+    let detect_type = if html {
         Some("text/html")
     } else {
         Some("text/plain")
     };
-    let (text, truncated) = match extract_body(&body, content_type) {
+    let (text, truncated) = match extract_body(&body, detect_type) {
         Ok(extracted) => extracted,
         Err(error) => return Ok(failure(&error.to_string(), None)),
     };
+    // The stored body is markdown or plain text, not the original HTML document.
+    let content_type = if html { "text/markdown" } else { "text/plain" };
     Ok(json!({
         "ok": true,
         "status": 200,

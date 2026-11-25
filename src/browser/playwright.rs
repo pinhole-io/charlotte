@@ -1273,6 +1273,116 @@ fn chromium_performance_args() -> Vec<String> {
     ]
 }
 
+/// A scrape failed because the Chromium process is gone, or for another reason.
+#[derive(Debug)]
+pub(crate) enum FreshScrapeError {
+    /// The Chromium process is no longer connected.
+    Disconnected,
+    /// Navigation or conversion failed while the browser was still connected.
+    Failed(CharlotteError),
+}
+
+/// Launch one Chromium process on an existing Playwright driver.
+pub(crate) async fn launch_chromium(
+    playwright: &Playwright,
+    config: &BrowserConfig,
+) -> Result<Browser, CharlotteError> {
+    let mut launch = LaunchOptions::new().headless(config.headless);
+    if let Some(ref path) = config.executable_path {
+        launch = launch.executable_path(path.clone());
+    }
+    if let Some(ref channel) = config.channel {
+        launch = launch.channel(channel.clone());
+    }
+    let args = chromium_launch_args(config);
+    if !args.is_empty() {
+        launch = launch.args(args);
+    }
+    Ok(playwright.chromium().launch_with_options(launch).await?)
+}
+
+/// Open a new context, scrape one URL, and close the context.
+///
+/// The context does not outlive the call, so cookies stay off other crawls.
+pub(crate) async fn scrape_in_fresh_context(
+    browser: &Browser,
+    config: &BrowserConfig,
+    url: &str,
+    options: NavigateOptions,
+    focus: Option<&str>,
+    max_html_bytes: usize,
+    max_markdown_chars: usize,
+) -> Result<Value, FreshScrapeError> {
+    if !browser.is_connected() {
+        return Err(FreshScrapeError::Disconnected);
+    }
+    let context = match create_isolated_context(browser, config).await {
+        Ok(context) => context,
+        Err(error) => {
+            return Err(map_scrape_failure(browser, error));
+        }
+    };
+    let scraped = scrape_page_in_context(
+        &context,
+        config,
+        url,
+        options,
+        focus,
+        max_html_bytes,
+        max_markdown_chars,
+    )
+    .await;
+    let _ = context.close().await;
+    match scraped {
+        Ok(value) => Ok(value),
+        Err(error) => Err(map_scrape_failure(browser, error)),
+    }
+}
+
+async fn scrape_page_in_context(
+    context: &BrowserContext,
+    config: &BrowserConfig,
+    url: &str,
+    options: NavigateOptions,
+    focus: Option<&str>,
+    max_html_bytes: usize,
+    max_markdown_chars: usize,
+) -> Result<Value, CharlotteError> {
+    configure_context(context, config).await?;
+    let page = context.new_page().await?;
+    let timeout = options.timeout.unwrap_or(config.navigation_timeout);
+    let wall = timeout.saturating_add(Duration::from_secs(8));
+    let scraped = tokio::time::timeout(
+        wall,
+        scrape_page(
+            &page,
+            url,
+            options,
+            timeout,
+            focus,
+            max_html_bytes,
+            max_markdown_chars,
+        ),
+    )
+    .await;
+    let _ = page.close().await;
+    match scraped {
+        Ok(result) => result,
+        Err(_) => Err(CharlotteError::msg(format!(
+            "scrape timed out after {}ms: {url}",
+            wall.as_millis()
+        ))),
+    }
+}
+
+fn map_scrape_failure(browser: &Browser, error: CharlotteError) -> FreshScrapeError {
+    if browser.is_connected() {
+        FreshScrapeError::Failed(error)
+    } else {
+        FreshScrapeError::Disconnected
+    }
+}
+
 fn chromium_launch_args(config: &BrowserConfig) -> Vec<String> {
     let mut args = Vec::new();
     if config.performance_launch_args {
