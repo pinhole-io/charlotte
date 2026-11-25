@@ -19,7 +19,7 @@ alwaysApply: false
 ## Errors and deps
 
 - `thiserror` for library errors.
-- Path dep: `superglue = { path = "../superglue" }` — API changes may need loom coordination.
+- Git dep: `superglue = { git = "https://github.com/pinhole-io/superglue", branch = "main" }` — API changes may need loom coordination.
 
 ## MSRV
 

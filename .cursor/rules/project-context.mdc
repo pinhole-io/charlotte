@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Charlotte
 
-Web-research agent SDK at `projects/charlotte/`. Built on sibling [`superglue`](../superglue) and `playwright-rs`.
+Web-research agent SDK at `projects/charlotte/`. Built on [`superglue`](https://github.com/pinhole-io/superglue) and `playwright-rs`.
 
 ## Tools
 

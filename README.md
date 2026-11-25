@@ -33,18 +33,19 @@ Charlotte launches Chromium through [playwright-rs](https://crates.io/crates/pla
 
 - Rust 1.88 or newer. `rust-version` in `Cargo.toml` follows playwright-rs.
 - Chromium that matches `playwright_rs::PLAYWRIGHT_VERSION`.
-- A sibling checkout of [superglue](https://github.com/pinhole-io/superglue). Cargo resolves `path = "../superglue"` even when optional features are off.
+- Network access on the first build so Cargo can fetch [superglue](https://github.com/pinhole-io/superglue) from git.
+- A sibling checkout of [jig](https://github.com/pinhole-io/jig). Cargo resolves `path = "../jig"`.
 - A sibling checkout of [notepad](https://github.com/pinhole-io/notepad) when you enable `notepad` or the default `full` feature.
 - `OPENAI_API_KEY` when you call a live model.
 
 ## Install
 
-There is no crates.io package. Clone the three repositories as siblings.
+There is no crates.io package. Clone `charlotte`, `jig`, and `notepad` as siblings. Cargo fetches `superglue` from git.
 
 ```bash
 mkdir -p ~/src && cd ~/src
 git clone https://github.com/pinhole-io/charlotte.git
-git clone https://github.com/pinhole-io/superglue.git
+git clone https://github.com/pinhole-io/jig.git
 git clone https://github.com/pinhole-io/notepad.git
 ```
 
@@ -53,7 +54,7 @@ You need this layout:
 ```text
 ~/src/
   charlotte/
-  superglue/
+  jig/
   notepad/
 ```
 
@@ -298,7 +299,8 @@ Browser and search variables are in [Browser backends](#browser-backends) and [S
 
 | What you see | What to do |
 | --- | --- |
-| `can't find crate superglue` or `notepad` | Clone those repositories next to this one. See [Install](#install). |
+| `can't find crate jig` or `notepad` | Clone those repositories next to this one. See [Install](#install). |
+| `can't find crate superglue` or git fetch fails | Allow Cargo to reach `https://github.com/pinhole-io/superglue`, then run `cargo fetch`. |
 | Missing `OPENAI_API_KEY` | Export the key before a live example. |
 | Playwright cannot find a browser | Install Chromium for `playwright_rs::PLAYWRIGHT_VERSION`. |
 | Search returns no rows | Start SearXNG at `CHARLOTTE_SEARXNG_URL`, or set `CHARLOTTE_SEARCH_BACKEND=browser`. |

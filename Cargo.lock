@@ -3992,6 +3992,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "superglue"
 version = "1.6.0"
+source = "git+https://github.com/pinhole-io/superglue?branch=main#52cdabfdd3407764a205458ef4c73fa607da85b4"
 dependencies = [
  "async-trait",
  "base64",
