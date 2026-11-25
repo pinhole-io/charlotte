@@ -7,14 +7,18 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use async_trait::async_trait;
+use jig::{
+    AgentRunner, AgentSpec, ApiMode, CoordinationSource, DoneCheck, RoundBudget, StaticDriver,
+    SuperGlueCompleter, ToolPolicy, ToolSet, TurnInput, VerifierRegistry, WorkflowRegistry,
+};
+use secrecy::ExposeSecret;
 use serde_json::{Value, json};
-use superglue::agents::{AgentEngine, AgentSpec};
 use superglue::cancel::CancellationToken;
 use superglue::chat::ChatOptions;
 use superglue::http::HttpClient;
+use superglue::providers::{ProviderCredentials, ProviderId};
 use superglue::tools::{Tool, ToolInvokeError, ToolRegistry, ToolSpec};
 
 use crate::CharlotteError;
@@ -493,7 +497,7 @@ async fn search_node(
     let handle = ensure_browser(live.search, live.browser_config, live.browser).await?;
     let registry = ToolRegistry::new();
     registry
-        .register(Arc::new(StopRepeat::new(Arc::new(SearchTool {
+        .register(Arc::new(ReportFailure::new(Arc::new(SearchTool {
             http: live.http.clone(),
             search: live.search.clone(),
             browser: handle,
@@ -526,7 +530,7 @@ async fn read_node(
     let registry = ToolRegistry::new();
     for tool in research_read_tools(&handle, live.browser_config, live.http) {
         registry
-            .register(Arc::new(StopRepeat::new(tool)))
+            .register(Arc::new(ReportFailure::new(tool)))
             .await
             .map_err(|err| CharlotteError::msg(err.to_string()))?;
     }
@@ -578,6 +582,23 @@ async fn open_browser(
     Ok(opened)
 }
 
+const GRAPH_SPEC: AgentSpec = AgentSpec {
+    id: "charlotte-graph",
+    prompt: "You are Charlotte, a careful web researcher.\n\n## Constraints\n- Do not invent URLs, quotes, or facts.",
+    instructions: "",
+    tools: ToolPolicy::fixed(ToolSet::All),
+    max_tool_rounds: RoundBudget::Server,
+    coordination: CoordinationSource::Single,
+    drivers: &["tool_loop"],
+    worktree: false,
+    done_check: DoneCheck::None,
+    children: &[],
+    swarm: false,
+    primary: false,
+    awaits_verify: false,
+    tools_error: "",
+};
+
 async fn run_node(
     instruction: &str,
     rounds: u32,
@@ -586,18 +607,68 @@ async fn run_node(
     options: &ChatOptions,
     user: &str,
 ) -> Result<String, CharlotteError> {
-    let spec = AgentSpec::new("Charlotte", "a careful web researcher.")
-        .with_instructions(instruction)
-        .with_constraint("Do not invent URLs, quotes, or facts.")
-        .with_max_tool_rounds(rounds);
-    let outcome = AgentEngine::new(spec)
-        .run(http, registry, user, options)
-        .await?;
-    outcome
-        .content
-        .map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty())
-        .ok_or(CharlotteError::BriefEmpty)
+    let rounds = rounds.max(1);
+    let completer = graph_completer(http, options);
+    let drivers = vec![Arc::new(StaticDriver {
+        id: "tool_loop",
+        chooser_line: "Use the research tools.",
+        budget: jig::Budget::tool_loop(),
+        task: None,
+        allowlist: &[],
+        prompt: "",
+        rounds: None,
+        deny_tools: false,
+    }) as Arc<dyn jig::EngineDriver>];
+    let workflows = WorkflowRegistry::with_chat(rounds);
+    let verifiers = VerifierRegistry::with_builtins();
+    let volatile = vec![instruction.to_string()];
+    let thinking = options
+        .reasoning_effort
+        .clone()
+        .unwrap_or_else(|| "none".to_string());
+    let cancel = options.cancel.clone().unwrap_or_default();
+    let outcome = AgentRunner::run(
+        &completer,
+        TurnInput {
+            spec: &GRAPH_SPEC,
+            drivers: &drivers,
+            workflows: &workflows,
+            verifiers: &verifiers,
+            tools: registry,
+            history: &[],
+            transcript: &[],
+            user_text: user,
+            volatile: &volatile,
+            cancel,
+            single: true,
+            unattended: false,
+            server_rounds: rounds,
+            swarm_steps: rounds,
+            model: &options.model,
+            thinking: &thinking,
+            temperature: options.temperature,
+        },
+        |_| {},
+    )
+    .await
+    .map_err(|err| CharlotteError::msg(err.to_string()))?;
+    let text = outcome.reply.trim().to_string();
+    if text.is_empty() {
+        Err(CharlotteError::BriefEmpty)
+    } else {
+        Ok(text)
+    }
+}
+
+fn graph_completer(http: &HttpClient, options: &ChatOptions) -> SuperGlueCompleter {
+    let mut credentials = ProviderCredentials::from_env();
+    credentials.insert_key(ProviderId::OpenAi, options.api_key.expose_secret());
+    credentials.insert_base_url(ProviderId::OpenAi, options.base_url.clone());
+    let completer = SuperGlueCompleter::from_client(http.clone())
+        .with_mode(ApiMode::ChatCompletions)
+        .with_base_url(options.base_url.clone());
+    completer.set_credentials(credentials);
+    completer
 }
 
 struct SearchTool {
@@ -623,45 +694,37 @@ impl Tool for SearchTool {
     }
 }
 
-struct StopRepeat {
+/// Turn a tool error into `ok: false` so [`jig::FailureTracker`] can see it.
+///
+/// The runner cancels the turn when the same failure repeats.
+struct ReportFailure {
     inner: Arc<dyn Tool>,
-    fails: AtomicU32,
 }
 
-impl StopRepeat {
+impl ReportFailure {
     fn new(inner: Arc<dyn Tool>) -> Self {
-        Self {
-            inner,
-            fails: AtomicU32::new(0),
-        }
+        Self { inner }
     }
 }
 
 #[async_trait]
-impl Tool for StopRepeat {
+impl Tool for ReportFailure {
     fn spec(&self) -> ToolSpec {
         self.inner.spec()
     }
 
     async fn call(&self, arguments: Value) -> Result<Value, ToolInvokeError> {
         match self.inner.call(arguments).await {
-            Ok(value) => {
-                self.fails.store(0, Ordering::Relaxed);
-                Ok(value)
-            }
-            Err(_) if self.fails.fetch_add(1, Ordering::Relaxed) == 0 => {
-                Ok(json!({"ok": false, "error": "the tool failed"}))
-            }
-            Err(_) => Err(ToolInvokeError::handler(
-                "the same tool failed twice",
-                Some("repeat".to_string()),
-            )),
+            Ok(value) => Ok(value),
+            Err(err) => Ok(json!({"ok": false, "error": err.to_string()})),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
     use super::*;
 
     #[test]

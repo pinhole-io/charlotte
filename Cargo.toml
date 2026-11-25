@@ -24,6 +24,7 @@ secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 superglue = { path = "../superglue" }
+jig = { path = "../jig" }
 notepad = { path = "../notepad", default-features = false, features = ["superglue"], optional = true }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }

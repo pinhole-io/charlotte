@@ -38,11 +38,12 @@ use charlotte::{
     register_charlotte_notepad_offload, register_charlotte_with_notepad, search_config_from_env,
     should_expand_brief,
 };
-use superglue::agents::{AgentEngine, AgentSpec};
-use superglue::chat::{ChatOptions, Conversation};
+use jig::{AgentRunner, StreamPiece, TurnInput, VerifierRegistry, WorkflowRegistry};
+use superglue::chat::ChatOptions;
 use superglue::guardrails::GuardrailRegistry;
 use superglue::hooks::HookRegistry;
 use superglue::http::HttpClient;
+use superglue::openai::ChatMessage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -116,7 +117,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guardrails = Arc::new(GuardrailRegistry::new());
 
     let spec = charlotte_agent_spec();
-    let engine = AgentEngine::new(spec);
 
     let base_opts = ChatOptions {
         base_url,
@@ -126,7 +126,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         temperature: Some(0.2),
         ..Default::default()
     };
-    let opts = options_for_agent(&engine.spec, base_opts.clone());
+    let completer = charlotte::agents::charlotte::prepare_completer(
+        http.clone(),
+        Arc::clone(&hooks),
+        Arc::clone(&guardrails),
+        &base_opts,
+    );
+    let drivers = charlotte::agents::charlotte::charlotte_drivers();
+    let workflows = WorkflowRegistry::with_chat(500);
+    let verifiers = VerifierRegistry::with_builtins();
     let brief_mode_env = std::env::var("CHARLOTTE_BRIEF_MODE").ok();
     let brief_mode = BriefMode::parse_env(brief_mode_env.as_deref());
 
@@ -149,13 +157,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if parsed.interactive {
         run_interactive(
             &http,
+            &completer,
+            spec,
+            &drivers,
+            &workflows,
+            &verifiers,
             &tools,
-            hooks.as_ref(),
-            guardrails.as_ref(),
-            &opts,
             &base_opts,
             &search_config,
             brief_mode,
+            hooks.as_ref(),
+            guardrails.as_ref(),
             notepad,
             offload_cfg,
         )
@@ -179,7 +191,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "brief_mode={} ({gate_source})",
             if should_expand { "expanded" } else { "direct" }
         );
-        let user_prompt = if should_expand {
+        let mut volatile = Vec::new();
+        if should_expand {
             let brief = expand_user_request_to_research_brief_shaped(
                 &http,
                 hooks.as_ref(),
@@ -191,17 +204,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
             eprintln!("\n--- Research brief ---\n{brief}\n");
-            format!(
-                "**Original request:** {prompt}\n\n\
-                 **Research brief (execute with the registered browser tools until success criteria are met):**\n\n\
-                 {brief}",
-                prompt = prompt,
-                brief = brief
-            )
-        } else {
-            prompt
-        };
-        run_single(&engine, &http, &tools, &user_prompt, &base_opts).await?;
+            volatile.push(format!(
+                "Research brief (execute with the registered browser tools until success criteria are met):\n\n{brief}"
+            ));
+        }
+        run_single(
+            &completer, spec, &drivers, &workflows, &verifiers, &tools, &base_opts, &prompt,
+            &volatile,
+        )
+        .await?;
     }
 
     if let Some(pool) = pool_for_close {
@@ -285,16 +296,6 @@ Environment:
     }
 }
 
-/// Mirror [`AgentEngine`]'s injection of system prompt, model override, and tool rounds.
-fn options_for_agent(spec: &AgentSpec, mut base: ChatOptions) -> ChatOptions {
-    base.system_prompt = Some(spec.compile_system_prompt());
-    if !spec.model.is_empty() {
-        base.model = spec.model.clone();
-    }
-    base.max_tool_rounds = spec.max_tool_rounds;
-    base
-}
-
 async fn should_expand_brief_auto(
     mode: BriefMode,
     http: &HttpClient,
@@ -320,35 +321,73 @@ async fn should_expand_brief_auto(
 }
 
 async fn run_single(
-    engine: &AgentEngine,
-    http: &HttpClient,
+    completer: &jig::SuperGlueCompleter,
+    spec: &'static jig::AgentSpec,
+    drivers: &[std::sync::Arc<dyn jig::EngineDriver>],
+    workflows: &WorkflowRegistry,
+    verifiers: &VerifierRegistry,
     tools: &superglue::tools::ToolRegistry,
-    prompt: &str,
     base_opts: &ChatOptions,
+    prompt: &str,
+    volatile: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let outcome = engine.run(http, tools, prompt, base_opts).await?;
-    println!("rounds:  {}", outcome.rounds);
-    println!("content: {:?}", outcome.content);
-    println!("finish:  {:?}", outcome.finish_reason);
+    let thinking = base_opts
+        .reasoning_effort
+        .clone()
+        .unwrap_or_else(|| "none".to_string());
+    let outcome = AgentRunner::run(
+        completer,
+        TurnInput {
+            spec,
+            drivers,
+            workflows,
+            verifiers,
+            tools,
+            history: &[],
+            transcript: &[],
+            user_text: prompt,
+            volatile,
+            cancel: superglue::cancel::CancellationToken::new(),
+            single: true,
+            unattended: false,
+            server_rounds: 500,
+            swarm_steps: 1,
+            model: &base_opts.model,
+            thinking: &thinking,
+            temperature: base_opts.temperature,
+        },
+        |piece| {
+            if let StreamPiece::Text(text) = piece {
+                print!("{text}");
+            }
+        },
+    )
+    .await?;
+    println!();
+    println!("content: {}", outcome.reply);
     Ok(())
 }
 
 async fn run_interactive(
     http: &HttpClient,
+    completer: &jig::SuperGlueCompleter,
+    spec: &'static jig::AgentSpec,
+    drivers: &[std::sync::Arc<dyn jig::EngineDriver>],
+    workflows: &WorkflowRegistry,
+    verifiers: &VerifierRegistry,
     tools: &superglue::tools::ToolRegistry,
-    hooks: &HookRegistry,
-    guardrails: &GuardrailRegistry,
-    opts: &ChatOptions,
     base_opts: &ChatOptions,
     search_config: &charlotte::SearchConfig,
     brief_mode: BriefMode,
+    hooks: &HookRegistry,
+    guardrails: &GuardrailRegistry,
     notepad: SharedNotepad,
     offload_cfg: charlotte::OffloadConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "Charlotte interactive mode — brief routing via CHARLOTTE_BRIEF_MODE=llm|heuristic|always|never (default llm). Commands: exit, quit, help"
     );
-    let mut conv = Conversation::new();
+    let mut transcript: Vec<ChatMessage> = Vec::new();
     let stdin = io::stdin();
     loop {
         print!("You: ");
@@ -375,7 +414,8 @@ async fn run_interactive(
             "brief_mode={} ({gate_source})",
             if should_expand { "expanded" } else { "direct" }
         );
-        let user_message = if should_expand {
+        let mut volatile = Vec::new();
+        if should_expand {
             let brief = expand_user_request_to_research_brief_shaped(
                 http,
                 hooks,
@@ -387,30 +427,52 @@ async fn run_interactive(
             )
             .await?;
             eprintln!("\n--- Research brief ---\n{brief}\n");
-            format!(
-                "**Original request:** {line}\n\n\
-                 **Research brief (execute with the registered browser tools until success criteria are met):**\n\n\
-                 {brief}",
-                line = line,
-                brief = brief
-            )
-        } else {
-            line.to_string()
-        };
-        conv.push_user(user_message);
-        let outcome = conv.complete(http, tools, hooks, guardrails, opts).await?;
-        {
-            let mut np = notepad.write().await;
-            compact_tool_messages(&mut conv.messages, &mut np, &offload_cfg);
+            volatile.push(format!(
+                "Research brief (execute with the registered browser tools until success criteria are met):\n\n{brief}"
+            ));
         }
-        println!(
-            "\nCharlotte: {}\n",
-            outcome.content.unwrap_or_else(|| "(no text)".to_string())
-        );
-        eprintln!(
-            "[rounds: {}, finish: {:?}]",
-            outcome.rounds, outcome.finish_reason
-        );
+        let thinking = base_opts
+            .reasoning_effort
+            .clone()
+            .unwrap_or_else(|| "none".to_string());
+        let outcome = AgentRunner::run(
+            completer,
+            TurnInput {
+                spec,
+                drivers,
+                workflows,
+                verifiers,
+                tools,
+                history: &[],
+                transcript: &transcript,
+                user_text: line,
+                volatile: &volatile,
+                cancel: superglue::cancel::CancellationToken::new(),
+                single: true,
+                unattended: false,
+                server_rounds: 500,
+                swarm_steps: 1,
+                model: &base_opts.model,
+                thinking: &thinking,
+                temperature: base_opts.temperature,
+            },
+            |piece| {
+                if let StreamPiece::Text(text) = piece {
+                    print!("{text}");
+                }
+            },
+        )
+        .await?;
+        println!();
+        {
+            let mut stored = outcome.transcript;
+            let mut np = notepad.write().await;
+            compact_tool_messages(&mut stored, &mut np, &offload_cfg);
+            transcript = stored;
+        }
+        if outcome.reply.is_empty() {
+            println!("(no text)\n");
+        }
     }
     Ok(())
 }

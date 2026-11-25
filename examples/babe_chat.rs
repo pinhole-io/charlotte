@@ -9,14 +9,17 @@
 //! ```
 
 use std::io::{self, Write};
+use std::sync::Arc;
 
-use charlotte::{
-    agents::babe::babe_agent_spec, http_client_from_env, register_charlotte_qdrant_tools,
-};
+use charlotte::agents::babe::babe_agent_spec;
+use charlotte::agents::charlotte::prepare_completer;
+use charlotte::{http_client_from_env, register_charlotte_qdrant_tools};
+use jig::{AgentRunner, StreamPiece, TurnInput, VerifierRegistry, WorkflowRegistry};
 use qdrant_client::Qdrant;
-use superglue::chat::{ChatOptions, Conversation};
+use superglue::chat::ChatOptions;
 use superglue::guardrails::GuardrailRegistry;
 use superglue::hooks::HookRegistry;
+use superglue::openai::ChatMessage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,28 +48,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     register_charlotte_qdrant_tools(&tools, &client).await?;
 
     let spec = babe_agent_spec();
-    let mut opts = ChatOptions {
+    let opts = ChatOptions {
         base_url,
         api_key: secrecy::SecretString::from(key),
         model,
-        max_tool_rounds: spec.max_tool_rounds,
+        reasoning_effort: Some("high".to_string()),
         temperature: Some(0.2),
         ..Default::default()
     };
-    opts.system_prompt = Some(spec.compile_system_prompt());
-    if !spec.model.is_empty() {
-        opts.model = spec.model.clone();
-    }
-
-    let hooks = HookRegistry::new();
-    let guardrails = GuardrailRegistry::new();
+    let hooks = Arc::new(HookRegistry::new());
+    let guardrails = Arc::new(GuardrailRegistry::new());
+    let completer = prepare_completer(http, Arc::clone(&hooks), Arc::clone(&guardrails), &opts);
+    let drivers = charlotte::agents::babe::babe_drivers();
+    let workflows = WorkflowRegistry::with_chat(20);
+    let verifiers = VerifierRegistry::with_builtins();
 
     println!(
         "Babe (example) — Qdrant tools only. Type exit or quit.\n\
          Qdrant: {qdrant_url}\n"
     );
 
-    let mut conv = Conversation::new();
+    let mut transcript: Vec<ChatMessage> = Vec::new();
     let stdin = io::stdin();
     loop {
         print!("You: ");
@@ -83,14 +85,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
-        conv.push_user(line.to_string());
-        let outcome = conv
-            .complete(&http, &tools, &hooks, &guardrails, &opts)
-            .await?;
-        println!(
-            "\nBabe: {}\n",
-            outcome.content.unwrap_or_else(|| "(no text)".to_string())
-        );
+        let thinking = opts
+            .reasoning_effort
+            .clone()
+            .unwrap_or_else(|| "none".to_string());
+        print!("\nBabe: ");
+        io::stdout().flush().ok();
+        let outcome = AgentRunner::run(
+            &completer,
+            TurnInput {
+                spec,
+                drivers: &drivers,
+                workflows: &workflows,
+                verifiers: &verifiers,
+                tools: &tools,
+                history: &[],
+                transcript: &transcript,
+                user_text: line,
+                volatile: &[],
+                cancel: superglue::cancel::CancellationToken::new(),
+                single: true,
+                unattended: false,
+                server_rounds: 20,
+                swarm_steps: 1,
+                model: &opts.model,
+                thinking: &thinking,
+                temperature: opts.temperature,
+            },
+            |piece| {
+                if let StreamPiece::Text(text) = piece {
+                    print!("{text}");
+                    let _ = io::stdout().flush();
+                }
+            },
+        )
+        .await?;
+        println!();
+        transcript = outcome.transcript;
+        if outcome.reply.is_empty() {
+            println!("(no text)\n");
+        }
     }
 
     Ok(())
