@@ -71,6 +71,47 @@ const OBSERVE_JS: &str = r#"
     const vw = window.innerWidth || 0;
     return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
   }
+  function charlotteCleanText(root) {
+    const blockTags = new Set([
+      "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DD", "DIV", "DL", "DT",
+      "FIELDSET", "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "H1", "H2", "H3",
+      "H4", "H5", "H6", "HEADER", "HR", "LI", "MAIN", "NAV", "OL", "P", "PRE",
+      "SECTION", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL"
+    ]);
+    const skipSelector =
+      "nav, aside, footer, header, script, style, noscript, svg, template, [hidden], [aria-hidden='true'], #toc, .toc, .vector-toc, .navbox, .mw-empty-elt, .hatnote";
+    const out = [];
+    function walk(node) {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        const t = (node.nodeValue || "").replace(/\s+/g, " ").trim();
+        if (t) out.push(t);
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.matches && node.matches(skipSelector)) return;
+      const st = window.getComputedStyle(node);
+      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") {
+        return;
+      }
+      const isBlock = blockTags.has(node.tagName);
+      if (isBlock && out.length && out[out.length - 1] !== "\n") {
+        out.push("\n");
+      }
+      for (const child of node.childNodes) {
+        walk(child);
+      }
+      if (isBlock && out.length && out[out.length - 1] !== "\n") {
+        out.push("\n");
+      }
+    }
+    walk(root);
+    return out
+      .join(" ")
+      .replace(/ *\n */g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
   function charlottePageText() {
     const root =
       document.querySelector('#mw-content-text .mw-parser-output') ||
@@ -88,8 +129,12 @@ const OBSERVE_JS: &str = r#"
       const text = (p.innerText || "").trim();
       if (text) prose.push(text);
     }
-    if (prose.length) return prose.join("\n\n");
-    return root.innerText || "";
+    const proseText = prose.join("\n\n");
+    const cleanRootText = charlotteCleanText(root) || (root.innerText || "").trim();
+    if (proseText.length >= 400 && proseText.length * 2 >= cleanRootText.length) {
+      return proseText;
+    }
+    return cleanRootText;
   }
   document.querySelectorAll("[data-charlotte-tid]").forEach((el) => {
     el.removeAttribute("data-charlotte-tid");
@@ -209,6 +254,47 @@ const GET_LINKS_JS: &str = r#"
     const vw = window.innerWidth || 0;
     return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
   }
+  function charlotteCleanText(root) {
+    const blockTags = new Set([
+      "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "DD", "DIV", "DL", "DT",
+      "FIELDSET", "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "H1", "H2", "H3",
+      "H4", "H5", "H6", "HEADER", "HR", "LI", "MAIN", "NAV", "OL", "P", "PRE",
+      "SECTION", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL"
+    ]);
+    const skipSelector =
+      "nav, aside, footer, header, script, style, noscript, svg, template, [hidden], [aria-hidden='true'], #toc, .toc, .vector-toc, .navbox, .mw-empty-elt, .hatnote";
+    const out = [];
+    function walk(node) {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        const t = (node.nodeValue || "").replace(/\s+/g, " ").trim();
+        if (t) out.push(t);
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.matches && node.matches(skipSelector)) return;
+      const st = window.getComputedStyle(node);
+      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") {
+        return;
+      }
+      const isBlock = blockTags.has(node.tagName);
+      if (isBlock && out.length && out[out.length - 1] !== "\n") {
+        out.push("\n");
+      }
+      for (const child of node.childNodes) {
+        walk(child);
+      }
+      if (isBlock && out.length && out[out.length - 1] !== "\n") {
+        out.push("\n");
+      }
+    }
+    walk(root);
+    return out
+      .join(" ")
+      .replace(/ *\n */g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
   function charlottePageText() {
     const root =
       document.querySelector('#mw-content-text .mw-parser-output') ||
@@ -226,8 +312,12 @@ const GET_LINKS_JS: &str = r#"
       const text = (p.innerText || "").trim();
       if (text) prose.push(text);
     }
-    if (prose.length) return prose.join("\n\n");
-    return root.innerText || "";
+    const proseText = prose.join("\n\n");
+    const cleanRootText = charlotteCleanText(root) || (root.innerText || "").trim();
+    if (proseText.length >= 400 && proseText.length * 2 >= cleanRootText.length) {
+      return proseText;
+    }
+    return cleanRootText;
   }
   document.querySelectorAll("[data-charlotte-tid]").forEach((el) => {
     el.removeAttribute("data-charlotte-tid");
@@ -473,9 +563,21 @@ mod tests {
     fn observe_reads_article_paragraphs() {
         for source in [OBSERVE_JS, GET_LINKS_JS] {
             assert!(source.contains("function charlottePageText"));
+            assert!(source.contains("function charlotteCleanText"));
             assert!(source.contains("markdown: body.slice(0, 8000)"));
             assert!(source.contains("const body = charlottePageText()"));
+            assert!(source.contains("proseText.length >= 400 && proseText.length * 2 >= cleanRootText.length"));
             assert!(!source.contains("document.body.innerText"));
+        }
+    }
+
+    #[test]
+    fn charlotte_page_text_preserves_non_paragraph_content_and_skips_chrome() {
+        for source in [OBSERVE_JS, GET_LINKS_JS] {
+            assert!(source.contains("nav, aside, footer, header, script, style, noscript"));
+            assert!(source.contains("st.display === \"none\""));
+            assert!(source.contains("\"TABLE\""));
+            assert!(source.contains("return cleanRootText;"));
         }
     }
 

@@ -13,6 +13,7 @@ use crate::error::CharlotteError;
 
 pub const DEFAULT_SEARXNG_URL: &str = "http://127.0.0.1:18088";
 const DEFAULT_WEB_SEARCH_COOLDOWN: Duration = Duration::from_secs(20);
+const DEFAULT_SEARXNG_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const SEARXNG_CIRCUIT_OPEN: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -66,6 +67,8 @@ pub struct SearchConfig {
     pub searxng_base_url: String,
     /// Minimum gap between completed `web_search` calls on the SearXNG path.
     pub web_search_cooldown: Duration,
+    /// Per-request timeout for SearXNG HTTP calls so a hung tunnel fails fast.
+    pub searxng_request_timeout: Duration,
     throttle: Arc<WebSearchThrottle>,
 }
 
@@ -80,8 +83,15 @@ impl SearchConfig {
             backend,
             searxng_base_url: searxng_base_url.into(),
             web_search_cooldown,
+            searxng_request_timeout: DEFAULT_SEARXNG_REQUEST_TIMEOUT,
             throttle: WebSearchThrottle::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_searxng_request_timeout(mut self, timeout: Duration) -> Self {
+        self.searxng_request_timeout = timeout;
+        self
     }
 }
 
@@ -147,15 +157,29 @@ async fn searxng_web_search(
     await_web_search_cooldown(&config.throttle, config.web_search_cooldown).await;
 
     let search_url = build_searxng_search_url(&config.searxng_base_url, query);
-    let bytes = match http.get(&search_url).await {
-        Ok(b) => b,
-        Err(e) => {
+    let fetch = tokio::time::timeout(config.searxng_request_timeout, http.get(&search_url)).await;
+    let bytes = match fetch {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
             mark_web_search_completed(&config.throttle).await;
             return Ok(json!({
                 "ok": false,
                 "error": "searxng_unreachable",
                 "search_url": search_url,
                 "message": e.to_string(),
+                "hint": "Start SearXNG via `make infra-up` or set CHARLOTTE_SEARCH_BACKEND=browser",
+            }));
+        }
+        Err(_) => {
+            mark_web_search_completed(&config.throttle).await;
+            return Ok(json!({
+                "ok": false,
+                "error": "searxng_unreachable",
+                "search_url": search_url,
+                "message": format!(
+                    "SearXNG request timed out after {}ms",
+                    config.searxng_request_timeout.as_millis()
+                ),
                 "hint": "Start SearXNG via `make infra-up` or set CHARLOTTE_SEARCH_BACKEND=browser",
             }));
         }
@@ -378,5 +402,42 @@ mod tests {
         });
         let (_, _) = tokio::join!(h1, h2);
         assert!(start.elapsed() >= Duration::from_millis(55));
+    }
+
+    #[tokio::test]
+    async fn searxng_unreachable_times_out_fast_on_hung_socket()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            if let Ok((_stream, _)) = listener.accept() {
+                let _ = stop_rx.recv_timeout(Duration::from_secs(2));
+            }
+        });
+
+        let http = HttpClient::new(superglue::http::ClientConfig::default())?;
+        let config = SearchConfig::new(
+            SearchBackendKind::Searxng,
+            format!("http://{addr}"),
+            Duration::ZERO,
+        )
+        .with_searxng_request_timeout(Duration::from_millis(120));
+
+        let start = Instant::now();
+        let value = web_search(&http, None, &config, "fresno weather", 5).await?;
+        let elapsed = start.elapsed();
+        let _ = stop_tx.send(());
+        let _ = server.join();
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"], "searxng_unreachable");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "expected fast SearXNG timeout, took {elapsed:?}"
+        );
+        Ok(())
     }
 }
