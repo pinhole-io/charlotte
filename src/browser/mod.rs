@@ -123,6 +123,18 @@ pub struct BrowserConfig {
     pub storage_state_path: Option<PathBuf>,
     /// Optional host allow-list and private-IP blocking for navigations.
     pub url_policy: UrlPolicy,
+    /// Reuse the remote browser's persistent default context when attaching over CDP
+    /// instead of opening an ephemeral isolated context that closes on drop.
+    pub use_default_context: bool,
+}
+
+impl BrowserConfig {
+    /// Configure whether CDP attachment binds to the remote browser's persistent default context.
+    #[must_use]
+    pub fn with_default_context(mut self, use_default_context: bool) -> Self {
+        self.use_default_context = use_default_context;
+        self
+    }
 }
 
 impl Default for BrowserConfig {
@@ -147,6 +159,7 @@ impl Default for BrowserConfig {
             extra_chromium_args: Vec::new(),
             storage_state_path: None,
             url_policy: UrlPolicy::default(),
+            use_default_context: false,
         }
     }
 }
@@ -534,18 +547,18 @@ pub(crate) fn tool_error(e: CharlotteError) -> superglue::tools::ToolInvokeError
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
 
     use super::*;
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    fn env_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
     }
 
     #[tokio::test]
     async fn from_config_uses_default_cdp_endpoint_for_obscura_backend() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_lock().lock().await;
         // SAFETY: this test serializes env mutation with a global lock.
         unsafe {
             std::env::set_var("CHARLOTTE_BROWSER_BACKEND", "obscura");
@@ -566,5 +579,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn browser_config_defaults_to_isolated_context_and_supports_builder() {
+        let default_cfg = BrowserConfig::default();
+        assert!(!default_cfg.use_default_context);
+
+        let persistent_cfg = BrowserConfig::default().with_default_context(true);
+        assert!(persistent_cfg.use_default_context);
     }
 }

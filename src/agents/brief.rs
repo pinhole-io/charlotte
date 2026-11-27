@@ -386,10 +386,10 @@ pub async fn judge_brief_gate(
 }
 
 fn typesafe_credentials(options: &ChatOptions) -> Option<ProviderCredentials> {
-    if let Some(creds) = options.provider_credentials.as_deref() {
-        if creds.has_key(ProviderId::TypeSafe) {
-            return Some(creds.clone());
-        }
+    if let Some(creds) = options.provider_credentials.as_deref()
+        && creds.has_key(ProviderId::TypeSafe)
+    {
+        return Some(creds.clone());
     }
     let env = ProviderCredentials::from_env();
     env.has_key(ProviderId::TypeSafe).then_some(env)

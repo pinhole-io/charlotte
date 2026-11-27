@@ -25,7 +25,7 @@ use crate::CharlotteError;
 use crate::browser::BrowserHandle;
 use crate::browser::url_policy::UrlPolicy;
 use crate::crawl::robots::RobotsFetcher;
-use crate::ingest::extract::{extract_structured_json, summarize_markdown};
+use crate::ingest::extract::{ExtractRequest, extract_structured_json, summarize_markdown};
 
 pub use handle_actor::HandlePageActor;
 pub use sidecar::{PageActor, ScriptedPageActor, UvSidecar};
@@ -865,10 +865,12 @@ async fn extract_or_summarize(
             &llm.hooks,
             &llm.guardrails,
             &llm.options,
-            markdown,
-            Some(goal),
-            Some(goal),
-            schema,
+            ExtractRequest {
+                markdown,
+                focus: Some(goal),
+                prompt: Some(goal),
+                schema,
+            },
         )
         .await
     } else {

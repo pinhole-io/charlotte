@@ -202,7 +202,7 @@ pub async fn scrape_many(
     options: ScrapeManyOptions,
 ) -> Result<Value, CharlotteError> {
     let runtime = pool.runtime().await?;
-    let used_concurrency = options.max_concurrency.max(1).min(SCRAPE_MAX_CONCURRENCY);
+    let used_concurrency = options.max_concurrency.clamp(1, SCRAPE_MAX_CONCURRENCY);
     let permit_limit = Arc::new(Semaphore::new(used_concurrency));
     let mut jobs = JoinSet::new();
 
@@ -326,7 +326,7 @@ pub async fn scrape_many_on(
     requests: Vec<ScrapeRequest>,
     options: ScrapeManyOptions,
 ) -> Result<Value, CharlotteError> {
-    let used_concurrency = options.max_concurrency.max(1).min(SCRAPE_MAX_CONCURRENCY);
+    let used_concurrency = options.max_concurrency.clamp(1, SCRAPE_MAX_CONCURRENCY);
     let permit_limit = Arc::new(Semaphore::new(used_concurrency));
     let mut jobs = JoinSet::new();
 

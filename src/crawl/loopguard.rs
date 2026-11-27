@@ -155,16 +155,15 @@ impl Tool for GuardedTool {
                 }
             } else if is_current_page_tool(tool_name)
                 && let Some(current_url) = state.current_url.as_ref()
+                && is_url_or_host_blocked(&state, current_url)
             {
-                if is_url_or_host_blocked(&state, current_url) {
-                    return Ok(json!({
-                        "ok": false,
-                        "error": "url_blocked",
-                        "url": current_url,
-                        "hint": "The current page URL was already flagged blocked; navigate elsewhere or use web_search snippets.",
-                        "advice": "finalize_or_change_strategy",
-                    }));
-                }
+                return Ok(json!({
+                    "ok": false,
+                    "error": "url_blocked",
+                    "url": current_url,
+                    "hint": "The current page URL was already flagged blocked; navigate elsewhere or use web_search snippets.",
+                    "advice": "finalize_or_change_strategy",
+                }));
             }
 
             if call_count > MAX_DUPLICATE_CALLS {
@@ -180,17 +179,15 @@ impl Tool for GuardedTool {
         let result = self.inner.call(arguments).await?;
         let mut state = self.state.lock().await;
 
-        if matches!(tool_name, NAV | SWITCH_TAB) {
-            if is_result_ok(&result) {
-                let effective = result
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .and_then(normalize_url_key)
-                    .or(target_url.clone());
-                if let Some(url) = effective {
-                    state.current_url = Some(url.clone());
-                    *state.visited_urls.entry(url).or_insert(0) += 1;
-                }
+        if matches!(tool_name, NAV | SWITCH_TAB) && is_result_ok(&result) {
+            let effective = result
+                .get("url")
+                .and_then(Value::as_str)
+                .and_then(normalize_url_key)
+                .or(target_url.clone());
+            if let Some(url) = effective {
+                state.current_url = Some(url.clone());
+                *state.visited_urls.entry(url).or_insert(0) += 1;
             }
         }
 

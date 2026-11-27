@@ -102,8 +102,8 @@ const TYPE_SECRET_JS: &str = r#"
 
 struct BrowserSession {
     owner: Option<BrowserOwner>,
-    #[allow(dead_code)]
     context: BrowserContext,
+    owns_context: bool,
     page: Page,
     cdp_session: Option<CDPSession>,
     cdp_session_page_url: Option<String>,
@@ -112,14 +112,9 @@ struct BrowserSession {
     last_web_search_at: Option<Instant>,
 }
 
-enum BrowserOwner {
-    Launched {
-        playwright: Playwright,
-        browser: Browser,
-    },
-    Cdp {
-        playwright: Playwright,
-    },
+struct BrowserOwner {
+    playwright: Box<Playwright>,
+    browser: Option<Browser>,
 }
 
 pub(crate) struct PlaywrightBackend {
@@ -130,6 +125,8 @@ pub(crate) struct PlaywrightBackend {
 struct SharedBrowserHost {
     playwright: Playwright,
     browser: Browser,
+    default_context: Option<BrowserContext>,
+    default_context_configured: bool,
     launched: bool,
 }
 
@@ -146,7 +143,7 @@ impl PlaywrightBrowserHost {
         cdp_endpoint: Option<&str>,
     ) -> Result<Self, CharlotteError> {
         let playwright = Playwright::launch().await?;
-        let (browser, launched, backend_id) = match backend {
+        let (browser, default_context, launched, backend_id) = match backend {
             BrowserBackendKind::Playwright => {
                 let mut launch = LaunchOptions::new().headless(config.headless);
                 if let Some(path) = &config.executable_path {
@@ -161,6 +158,7 @@ impl PlaywrightBrowserHost {
                 }
                 (
                     playwright.chromium().launch_with_options(launch).await?,
+                    None,
                     true,
                     "playwright",
                 )
@@ -169,14 +167,17 @@ impl PlaywrightBrowserHost {
                 let endpoint = cdp_endpoint.ok_or_else(|| {
                     CharlotteError::msg("CDP endpoint is required for the CDP browser backend")
                 })?;
-                let (browser, _) = connect_browser_over_cdp(&playwright, endpoint).await?;
-                (browser, false, "obscura-cdp")
+                let (browser, default_context) =
+                    connect_browser_over_cdp(&playwright, endpoint).await?;
+                (browser, default_context, false, "obscura-cdp")
             }
         };
         Ok(Self {
             inner: Mutex::new(Some(SharedBrowserHost {
                 playwright,
                 browser,
+                default_context,
+                default_context_configured: false,
                 launched,
             })),
             config,
@@ -185,6 +186,34 @@ impl PlaywrightBrowserHost {
     }
 
     pub(crate) async fn open_backend(&self) -> Result<Arc<dyn BrowserBackend>, CharlotteError> {
+        let persistent_target = {
+            let mut guard = self.inner.lock().await;
+            let host = guard.as_mut().ok_or(CharlotteError::Closed)?;
+            if should_bind_default_context(
+                self.config.use_default_context,
+                host.default_context.is_some(),
+            ) {
+                let ctx = host.default_context.clone().ok_or(CharlotteError::Closed)?;
+                let needs_config = !host.default_context_configured;
+                if needs_config {
+                    configure_context(&ctx, &self.config).await?;
+                    host.default_context_configured = true;
+                }
+                Some(ctx)
+            } else {
+                None
+            }
+        };
+        if let Some(context) = persistent_target {
+            let backend = PlaywrightBackend::attach_persistent_shared(
+                context,
+                self.config.clone(),
+                self.backend_id,
+            )
+            .await?;
+            return Ok(Arc::new(backend));
+        }
+
         let browser = {
             let guard = self.inner.lock().await;
             guard
@@ -250,17 +279,31 @@ impl PlaywrightBackend {
         config: BrowserConfig,
         endpoint_url: &str,
     ) -> Result<Self, CharlotteError> {
-        let (browser, _) = connect_browser_over_cdp(&playwright, endpoint_url).await?;
-        let context = create_isolated_context(&browser, &config).await?;
-        configure_context(&context, &config).await?;
-
-        let page = context.new_page().await?;
+        let (browser, default_context) =
+            connect_browser_over_cdp(&playwright, endpoint_url).await?;
+        let (context, page, owns_context) =
+            if should_bind_default_context(config.use_default_context, default_context.is_some())
+                && let Some(context) = default_context
+            {
+                configure_context(&context, &config).await?;
+                let page = acquire_default_context_page(&context).await?;
+                (context, page, false)
+            } else {
+                let context = create_isolated_context(&browser, &config).await?;
+                configure_context(&context, &config).await?;
+                let page = context.new_page().await?;
+                (context, page, true)
+            };
 
         let network_events = Arc::new(Mutex::new(VecDeque::new()));
         install_network_observers(&page, Arc::clone(&network_events)).await?;
         let session = BrowserSession {
-            owner: Some(BrowserOwner::Cdp { playwright }),
+            owner: Some(BrowserOwner {
+                playwright: Box::new(playwright),
+                browser: None,
+            }),
             context,
+            owns_context,
             page,
             cdp_session: None,
             cdp_session_page_url: None,
@@ -286,11 +329,12 @@ impl PlaywrightBackend {
         let network_events = Arc::new(Mutex::new(VecDeque::new()));
         install_network_observers(&page, Arc::clone(&network_events)).await?;
         let session = BrowserSession {
-            owner: Some(BrowserOwner::Launched {
-                playwright,
-                browser,
+            owner: Some(BrowserOwner {
+                playwright: Box::new(playwright),
+                browser: Some(browser),
             }),
             context,
+            owns_context: true,
             page,
             cdp_session: None,
             cdp_session_page_url: None,
@@ -317,6 +361,32 @@ impl PlaywrightBackend {
         let session = BrowserSession {
             owner: None,
             context,
+            owns_context: true,
+            page,
+            cdp_session: None,
+            cdp_session_page_url: None,
+            network_events,
+            config,
+            last_web_search_at: None,
+        };
+        Ok(Self {
+            inner: Mutex::new(Some(session)),
+            backend_id,
+        })
+    }
+
+    async fn attach_persistent_shared(
+        context: BrowserContext,
+        config: BrowserConfig,
+        backend_id: &'static str,
+    ) -> Result<Self, CharlotteError> {
+        let page = acquire_default_context_page(&context).await?;
+        let network_events = Arc::new(Mutex::new(VecDeque::new()));
+        install_network_observers(&page, Arc::clone(&network_events)).await?;
+        let session = BrowserSession {
+            owner: None,
+            context,
+            owns_context: false,
             page,
             cdp_session: None,
             cdp_session_page_url: None,
@@ -400,10 +470,56 @@ async fn create_isolated_context(
     Ok(browser.new_context_with_options(options.build()).await?)
 }
 
+const fn should_bind_default_context(use_default_context: bool, has_default_context: bool) -> bool {
+    use_default_context && has_default_context
+}
+
+fn context_pages(context: &BrowserContext) -> Vec<Page> {
+    let tracked: Vec<Page> = context
+        .pages()
+        .into_iter()
+        .filter(|page| !page.is_closed())
+        .collect();
+    if !tracked.is_empty() {
+        return tracked;
+    }
+
+    // `playwright-rs` 0.10 populates `BrowserContext::pages()` asynchronously via `tokio::spawn`
+    // on `"page"` events and does not push pre-existing CDP targets inside `Page::new`. Fall back
+    // to child `Page` objects registered on the connection under `context.guid()`.
+    let context_guid = context.guid();
+    let mut discovered: Vec<Page> = context
+        .connection()
+        .all_objects_sync()
+        .into_iter()
+        .filter_map(|obj| obj.as_any().downcast_ref::<Page>().cloned())
+        .filter(|page| {
+            !page.is_closed()
+                && page
+                    .parent()
+                    .is_some_and(|parent| parent.guid() == context_guid)
+        })
+        .collect();
+    discovered.sort_by(|a, b| a.guid().cmp(b.guid()));
+    discovered
+}
+
+async fn acquire_default_context_page(context: &BrowserContext) -> Result<Page, CharlotteError> {
+    tokio::task::yield_now().await;
+    if let Some(page) = context_pages(context).into_iter().next() {
+        let _ = page.main_frame().await;
+        return Ok(page);
+    }
+    Ok(context.new_page().await?)
+}
+
 async fn configure_context(
     context: &BrowserContext,
     config: &BrowserConfig,
 ) -> Result<(), CharlotteError> {
+    context
+        .set_default_navigation_timeout(config.navigation_timeout.as_millis() as f64)
+        .await;
     if matches!(config.automation_profile, AutomationProfile::Stealth) {
         context.add_init_script(STEALTH_INIT_SCRIPT).await?;
     }
@@ -432,23 +548,32 @@ impl BrowserBackend for PlaywrightBackend {
         let mut guard = self.inner.lock().await;
         if let Some(s) = guard.take() {
             match s.owner {
-                Some(BrowserOwner::Launched {
+                Some(BrowserOwner {
                     playwright,
-                    browser,
+                    browser: Some(browser),
                 }) => {
                     let browser_result = browser.close().await.map_err(CharlotteError::from);
                     let driver_result = playwright.shutdown().await.map_err(CharlotteError::from);
                     browser_result?;
                     driver_result?;
                 }
-                Some(BrowserOwner::Cdp { playwright }) => {
-                    let context_result = s.context.close().await.map_err(CharlotteError::from);
+                Some(BrowserOwner {
+                    playwright,
+                    browser: None,
+                }) => {
+                    let context_result = if s.owns_context {
+                        s.context.close().await.map_err(CharlotteError::from)
+                    } else {
+                        Ok(())
+                    };
                     let driver_result = playwright.shutdown().await.map_err(CharlotteError::from);
                     context_result?;
                     driver_result?;
                 }
                 None => {
-                    s.context.close().await?;
+                    if s.owns_context {
+                        s.context.close().await?;
+                    }
                 }
             }
         }
@@ -868,7 +993,7 @@ impl BrowserBackend for PlaywrightBackend {
     async fn list_tabs(&self) -> Result<Value, CharlotteError> {
         let mut guard = self.inner.lock().await;
         let s = guard.as_mut().ok_or(CharlotteError::Closed)?;
-        let pages = s.context.pages();
+        let pages = context_pages(&s.context);
         let mut tabs = Vec::with_capacity(pages.len());
         for (i, p) in pages.iter().enumerate() {
             let title = p.title().await.unwrap_or_default();
@@ -889,7 +1014,7 @@ impl BrowserBackend for PlaywrightBackend {
     ) -> Result<Value, CharlotteError> {
         let mut guard = self.inner.lock().await;
         let s = guard.as_mut().ok_or(CharlotteError::Closed)?;
-        let pages = s.context.pages();
+        let pages = context_pages(&s.context);
         let target = if let Some(i) = index {
             pages.get(i).cloned()
         } else if let Some(fragment) = url_contains.map(str::trim).filter(|f| !f.is_empty()) {
@@ -1253,10 +1378,10 @@ async fn ensure_cdp_session_for_active_page(
     session: &mut BrowserSession,
 ) -> Result<CDPSession, CharlotteError> {
     let active_page_url = session.page.url();
-    if cdp_session_matches_active_page(session.cdp_session_page_url.as_deref(), &active_page_url) {
-        if let Some(existing) = session.cdp_session.clone() {
-            return Ok(existing);
-        }
+    if cdp_session_matches_active_page(session.cdp_session_page_url.as_deref(), &active_page_url)
+        && let Some(existing) = session.cdp_session.clone()
+    {
+        return Ok(existing);
     }
     session.cdp_session = None;
     session.cdp_session_page_url = None;
@@ -1650,16 +1775,15 @@ async fn parse_ddg_results(
         }
 
         let page_url = page.url();
-        if let Some((title, text)) = ddg_page_snapshot(page).await {
-            if let Some(reason) =
+        if let Some((title, text)) = ddg_page_snapshot(page).await
+            && let Some(reason) =
                 detect_block_page_with_url(title.as_deref(), &text, Some(&page_url))
-            {
-                return Ok(DdgParseOutcome {
-                    results: Vec::new(),
-                    blocked_reason: Some(reason),
-                    warning: None,
-                });
-            }
+        {
+            return Ok(DdgParseOutcome {
+                results: Vec::new(),
+                blocked_reason: Some(reason),
+                warning: None,
+            });
         }
 
         let n = ddg_result_row_count(page).await.unwrap_or(0);
@@ -1887,5 +2011,13 @@ mod optional_css_selector_tests {
         let five_secs_ago = Instant::now() - Duration::from_secs(5);
         let remaining = web_search_cooldown_remaining(Some(five_secs_ago), Duration::from_secs(8));
         assert!(remaining >= Duration::from_secs(2) && remaining <= Duration::from_secs(4));
+    }
+
+    #[test]
+    fn default_context_binding_requires_opt_in_and_server_context() {
+        assert!(!super::should_bind_default_context(false, false));
+        assert!(!super::should_bind_default_context(false, true));
+        assert!(!super::should_bind_default_context(true, false));
+        assert!(super::should_bind_default_context(true, true));
     }
 }

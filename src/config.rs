@@ -139,7 +139,6 @@ pub fn apply_browser_config_from_env(mut c: BrowserConfig) -> BrowserConfig {
 }
 
 /// Search backend config from `CHARLOTTE_SEARCH_BACKEND` and `CHARLOTTE_SEARXNG_URL`.
-#[must_use]
 pub fn search_config_from_env() -> Result<SearchConfig, CharlotteError> {
     let backend = match std::env::var("CHARLOTTE_SEARCH_BACKEND") {
         Ok(raw) => {

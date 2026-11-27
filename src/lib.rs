@@ -11,6 +11,8 @@ mod error;
 pub mod agents;
 pub mod browser;
 pub mod crawl;
+#[cfg(feature = "host")]
+pub mod host;
 pub mod ingest;
 #[cfg(feature = "notepad")]
 pub mod scratchpad;
@@ -70,7 +72,7 @@ pub use ingest::chunk::{ChunkDraft, Chunker, ChunkerConfig};
 pub use ingest::dedup::{
     DedupConfig, deduplicate_batch, deduplicate_with_meta, normalize_for_exact_dedup, simhash64,
 };
-pub use ingest::extract::{extract_structured_json, summarize_markdown};
+pub use ingest::extract::{ExtractRequest, extract_structured_json, summarize_markdown};
 pub use ingest::markdown::{
     AGENT_DEFAULT_MAX_HTML_BYTES, AGENT_DEFAULT_MAX_MARKDOWN_CHARS, AGENT_MAX_HTML_BYTES_CAP,
     AGENT_MAX_MARKDOWN_CHARS_CAP, body_html_to_markdown, clamp_agent_html_bytes,

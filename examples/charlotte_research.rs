@@ -154,24 +154,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     offload_cfg.auto_offload = true;
     register_charlotte_notepad_offload(hooks.as_ref(), notepad.clone(), offload_cfg.clone()).await;
 
+    let runtime = ResearchRuntime {
+        http: &http,
+        completer: &completer,
+        spec,
+        drivers: &drivers,
+        workflows: &workflows,
+        verifiers: &verifiers,
+        tools: &tools,
+        base_opts: &base_opts,
+        search_config: &search_config,
+        brief_mode,
+        hooks: hooks.as_ref(),
+        guardrails: guardrails.as_ref(),
+    };
+
     if parsed.interactive {
-        run_interactive(
-            &http,
-            &completer,
-            spec,
-            &drivers,
-            &workflows,
-            &verifiers,
-            &tools,
-            &base_opts,
-            &search_config,
-            brief_mode,
-            hooks.as_ref(),
-            guardrails.as_ref(),
-            notepad,
-            offload_cfg,
-        )
-        .await?;
+        run_interactive(&runtime, notepad, offload_cfg).await?;
     } else {
         let prompt = if parsed.prompt_words.is_empty() {
             "What is the current stable Rust version? Use web search, cite URLs.".to_string()
@@ -208,11 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Research brief (execute with the registered browser tools until success criteria are met):\n\n{brief}"
             ));
         }
-        run_single(
-            &completer, spec, &drivers, &workflows, &verifiers, &tools, &base_opts, &prompt,
-            &volatile,
-        )
-        .await?;
+        run_single(&runtime, &prompt, &volatile).await?;
     }
 
     if let Some(pool) = pool_for_close {
@@ -320,29 +315,39 @@ async fn should_expand_brief_auto(
     }
 }
 
-async fn run_single(
-    completer: &jig::SuperGlueCompleter,
+struct ResearchRuntime<'a> {
+    http: &'a HttpClient,
+    completer: &'a jig::SuperGlueCompleter,
     spec: &'static jig::AgentSpec,
-    drivers: &[std::sync::Arc<dyn jig::EngineDriver>],
-    workflows: &WorkflowRegistry,
-    verifiers: &VerifierRegistry,
-    tools: &superglue::tools::ToolRegistry,
-    base_opts: &ChatOptions,
+    drivers: &'a [std::sync::Arc<dyn jig::EngineDriver>],
+    workflows: &'a WorkflowRegistry,
+    verifiers: &'a VerifierRegistry,
+    tools: &'a superglue::tools::ToolRegistry,
+    base_opts: &'a ChatOptions,
+    search_config: &'a charlotte::SearchConfig,
+    brief_mode: BriefMode,
+    hooks: &'a HookRegistry,
+    guardrails: &'a GuardrailRegistry,
+}
+
+async fn run_single(
+    runtime: &ResearchRuntime<'_>,
     prompt: &str,
     volatile: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let thinking = base_opts
+    let thinking = runtime
+        .base_opts
         .reasoning_effort
         .clone()
         .unwrap_or_else(|| "none".to_string());
     let outcome = AgentRunner::run(
-        completer,
+        runtime.completer,
         TurnInput {
-            spec,
-            drivers,
-            workflows,
-            verifiers,
-            tools,
+            spec: runtime.spec,
+            drivers: runtime.drivers,
+            workflows: runtime.workflows,
+            verifiers: runtime.verifiers,
+            tools: runtime.tools,
             history: &[],
             transcript: &[],
             user_text: prompt,
@@ -352,9 +357,10 @@ async fn run_single(
             unattended: false,
             server_rounds: 500,
             swarm_steps: 1,
-            model: &base_opts.model,
+            model: &runtime.base_opts.model,
             thinking: &thinking,
-            temperature: base_opts.temperature,
+            temperature: runtime.base_opts.temperature,
+            steering: None,
         },
         |piece| {
             if let StreamPiece::Text(text) = piece {
@@ -369,21 +375,24 @@ async fn run_single(
 }
 
 async fn run_interactive(
-    http: &HttpClient,
-    completer: &jig::SuperGlueCompleter,
-    spec: &'static jig::AgentSpec,
-    drivers: &[std::sync::Arc<dyn jig::EngineDriver>],
-    workflows: &WorkflowRegistry,
-    verifiers: &VerifierRegistry,
-    tools: &superglue::tools::ToolRegistry,
-    base_opts: &ChatOptions,
-    search_config: &charlotte::SearchConfig,
-    brief_mode: BriefMode,
-    hooks: &HookRegistry,
-    guardrails: &GuardrailRegistry,
+    runtime: &ResearchRuntime<'_>,
     notepad: SharedNotepad,
     offload_cfg: charlotte::OffloadConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let ResearchRuntime {
+        http,
+        completer,
+        spec,
+        drivers,
+        workflows,
+        verifiers,
+        tools,
+        base_opts,
+        search_config,
+        brief_mode,
+        hooks,
+        guardrails,
+    } = *runtime;
     println!(
         "Charlotte interactive mode — brief routing via CHARLOTTE_BRIEF_MODE=llm|heuristic|always|never (default llm). Commands: exit, quit, help"
     );
@@ -455,6 +464,7 @@ async fn run_interactive(
                 model: &base_opts.model,
                 thinking: &thinking,
                 temperature: base_opts.temperature,
+                steering: None,
             },
             |piece| {
                 if let StreamPiece::Text(text) = piece {

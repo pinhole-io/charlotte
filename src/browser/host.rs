@@ -78,7 +78,11 @@ impl BrowserHost {
         })
     }
 
-    /// Open an isolated browser context for one host runtime.
+    /// Open a browser session for one host runtime.
+    ///
+    /// Opens an isolated context by default. When [`BrowserConfig::use_default_context`] is
+    /// `true` on [`BrowserBackendKind::ObscuraCdp`] and the remote browser exposes a persistent
+    /// `defaultContext`, binds to that shared context without closing it when the session drops.
     pub async fn open_session(&self) -> Result<BrowserHandle, CharlotteError> {
         let backend = self.inner.open_backend().await?;
         Ok(BrowserHandle::from_backend(backend))
@@ -108,8 +112,10 @@ mod tests {
 
     #[test]
     fn browser_limits_must_be_nonzero() {
-        let mut browser = BrowserConfig::default();
-        browser.max_html_bytes = 0;
+        let browser = BrowserConfig {
+            max_html_bytes: 0,
+            ..BrowserConfig::default()
+        };
         let config = BrowserHostConfig {
             backend: BrowserBackendKind::Playwright,
             browser,

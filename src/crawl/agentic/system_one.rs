@@ -946,9 +946,8 @@ pub async fn decide_step(
         return Ok(system_one_unavailable_stop());
     };
     for _ in 1..=SYSTEM_ONE_RETRIES {
-        match judge_step(http, creds, ctx).await {
-            Ok(decision) => return Ok(decision),
-            Err(_) => {}
+        if let Ok(decision) = judge_step(http, creds, ctx).await {
+            return Ok(decision);
         }
     }
     tracing::warn!(target: "charlotte::agentic_crawl", "System One unavailable");
@@ -1019,8 +1018,8 @@ mod tests {
 
     #[test]
     fn parse_done_accepts_only_yes_and_no() {
-        assert_eq!(parse_done("yes").expect("yes"), true);
-        assert_eq!(parse_done("no").expect("no"), false);
+        assert!(parse_done("yes").expect("yes"));
+        assert!(!parse_done("no").expect("no"));
         assert!(parse_done("stop").is_err());
     }
 

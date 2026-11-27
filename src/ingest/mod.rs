@@ -75,11 +75,13 @@ pub struct IngestOptions {
     pub hooks: IngestHooks,
 }
 
+type AfterExtractHook = Arc<dyn Fn(&SourcePage) + Send + Sync>;
+
 /// Optional callbacks (same spirit as [`crate::crawl::CrawlHooks`]).
 #[derive(Clone, Default)]
 pub struct IngestHooks {
     /// Called once per source page after text is available (before chunking).
-    pub after_extract: Option<Arc<dyn Fn(&SourcePage) + Send + Sync>>,
+    pub after_extract: Option<AfterExtractHook>,
 }
 
 /// One logical document (one URL or one raw blob).

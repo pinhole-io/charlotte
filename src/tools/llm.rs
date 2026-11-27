@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use superglue::tools::{Tool, ToolInvokeError, ToolSpec};
 
 use crate::browser::{BrowserHandle, tool_error};
-use crate::ingest::extract::{extract_structured_json, summarize_markdown};
+use crate::ingest::extract::{ExtractRequest, extract_structured_json, summarize_markdown};
 use crate::ingest::markdown::{
     AGENT_DEFAULT_MAX_HTML_BYTES, AGENT_DEFAULT_MAX_MARKDOWN_CHARS, clamp_agent_html_bytes,
     clamp_agent_markdown_chars,
@@ -100,10 +100,12 @@ impl Tool for ExtractTool {
             llm.hooks.as_ref(),
             llm.guardrails.as_ref(),
             &llm.options,
-            markdown,
-            focus,
-            prompt,
-            schema,
+            ExtractRequest {
+                markdown,
+                focus,
+                prompt,
+                schema,
+            },
         )
         .await
         .map_err(tool_error)

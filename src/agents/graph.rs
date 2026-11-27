@@ -647,6 +647,7 @@ async fn run_node(
             model: &options.model,
             thinking: &thinking,
             temperature: options.temperature,
+            steering: None,
         },
         |_| {},
     )

@@ -111,6 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 model: &opts.model,
                 thinking: &thinking,
                 temperature: opts.temperature,
+                steering: None,
             },
             |piece| {
                 if let StreamPiece::Text(text) = piece {

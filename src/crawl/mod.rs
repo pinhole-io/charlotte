@@ -104,11 +104,14 @@ impl Default for CrawlRunConfig {
     }
 }
 
+type BeforeNavigateHook = Arc<dyn Fn(&str, usize) + Send + Sync>;
+type AfterPageHook = Arc<dyn Fn(&str, usize, &Value) + Send + Sync>;
+
 /// Optional synchronous hooks for observability (metrics, tracing, custom filtering).
 #[derive(Clone, Default)]
 pub struct CrawlHooks {
-    pub before_navigate: Option<Arc<dyn Fn(&str, usize) + Send + Sync>>,
-    pub after_page: Option<Arc<dyn Fn(&str, usize, &Value) + Send + Sync>>,
+    pub before_navigate: Option<BeforeNavigateHook>,
+    pub after_page: Option<AfterPageHook>,
 }
 
 /// Share crawl payloads across [`deep_crawl`] runs or with other tasks (`nav` + `links` JSON).
@@ -251,19 +254,10 @@ fn map_urls_from_pages(pages: Option<&Value>) -> Vec<String> {
 ///
 /// - `max_chunks == 0` — no chunk-count limit.
 /// - `max_total_text_chars == 0` — no total character limit.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SiteCrawlOutputLimits {
     pub max_chunks: usize,
     pub max_total_text_chars: usize,
-}
-
-impl Default for SiteCrawlOutputLimits {
-    fn default() -> Self {
-        Self {
-            max_chunks: 0,
-            max_total_text_chars: 0,
-        }
-    }
 }
 
 impl SiteCrawlOutputLimits {
@@ -434,30 +428,26 @@ pub async fn deep_crawl_parallel(
     let in_flight = Arc::new(AtomicUsize::new(0));
     let work = Arc::new(Notify::new());
 
-    let run_a = Arc::new(run.clone());
-    let hooks_a = Arc::new(hooks.clone());
+    let shared = Arc::new(ParallelCrawlShared {
+        run: Arc::new(run.clone()),
+        hooks: Arc::new(hooks.clone()),
+        frontier: Arc::clone(&frontier),
+        visited: Arc::clone(&visited),
+        results: Arc::clone(&results),
+        stop: Arc::clone(&stop),
+        in_flight: Arc::clone(&in_flight),
+        work: Arc::clone(&work),
+        robots: robots_workers,
+    });
 
     let n_workers = pool.handles().len();
     let mut join_set = JoinSet::new();
 
     for wid in 0..n_workers {
         let handle = pool.handles()[wid].clone();
-        let frontier = Arc::clone(&frontier);
-        let visited = Arc::clone(&visited);
-        let results = Arc::clone(&results);
-        let stop = Arc::clone(&stop);
-        let in_flight = Arc::clone(&in_flight);
-        let work = Arc::clone(&work);
-        let run_c = Arc::clone(&run_a);
-        let hooks_c = Arc::clone(&hooks_a);
-        let robots_w = robots_workers.clone();
+        let shared_w = Arc::clone(&shared);
 
-        join_set.spawn(async move {
-            parallel_worker_loop(
-                handle, run_c, hooks_c, frontier, visited, results, stop, in_flight, work, robots_w,
-            )
-            .await
-        });
+        join_set.spawn(async move { parallel_worker_loop(handle, shared_w).await });
     }
 
     while let Some(joined) = join_set.join_next().await {
@@ -480,8 +470,7 @@ pub async fn deep_crawl_parallel(
     }))
 }
 
-async fn parallel_worker_loop(
-    handle: BrowserHandle,
+struct ParallelCrawlShared {
     run: Arc<CrawlRunConfig>,
     hooks: Arc<CrawlHooks>,
     frontier: Arc<Mutex<VecDeque<(String, usize)>>>,
@@ -491,7 +480,21 @@ async fn parallel_worker_loop(
     in_flight: Arc<AtomicUsize>,
     work: Arc<Notify>,
     robots: Option<Arc<RobotsFetcher>>,
+}
+
+async fn parallel_worker_loop(
+    handle: BrowserHandle,
+    shared: Arc<ParallelCrawlShared>,
 ) -> Result<(), CharlotteError> {
+    let run = &shared.run;
+    let hooks = &shared.hooks;
+    let frontier = &shared.frontier;
+    let visited = &shared.visited;
+    let results = &shared.results;
+    let stop = &shared.stop;
+    let in_flight = &shared.in_flight;
+    let work = &shared.work;
+    let robots = &shared.robots;
     loop {
         if stop.load(Ordering::Acquire) {
             break;
@@ -545,7 +548,7 @@ async fn parallel_worker_loop(
         }
 
         let page_res =
-            crawl_url_once(&handle, &run, &hooks, url.clone(), depth, robots.as_ref()).await;
+            crawl_url_once(&handle, run, hooks, url.clone(), depth, robots.as_ref()).await;
 
         in_flight.fetch_sub(1, Ordering::SeqCst);
         work.notify_waiters();
@@ -621,10 +624,8 @@ async fn crawl_url_once(
 
     let from_cache = cached_blob.is_some();
 
-    if !from_cache {
-        if let Some(ref h) = hooks.before_navigate {
-            h(&url, depth);
-        }
+    if !from_cache && let Some(ref h) = hooks.before_navigate {
+        h(&url, depth);
     }
 
     let (nav, links_val, outlink_norms, markdown_json) = if let Some(blob) = cached_blob {

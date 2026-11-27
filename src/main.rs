@@ -284,17 +284,19 @@ async fn run_charlotte(
         print!("\nCharlotte: ");
         io::stdout().flush().ok();
         let outcome = run_turn(
-            &completer,
-            spec,
-            &drivers,
-            &workflows,
-            &verifiers,
-            &tools,
-            base_opts,
+            &TurnSession {
+                completer: &completer,
+                spec,
+                drivers: &drivers,
+                workflows: &workflows,
+                verifiers: &verifiers,
+                tools: &tools,
+                options: base_opts,
+                debug_chat,
+            },
             &transcript,
             line,
             &volatile,
-            debug_chat,
         )
         .await?;
         println!();
@@ -339,32 +341,37 @@ fn render_piece(piece: StreamPiece, debug_chat: bool) {
     }
 }
 
-async fn run_turn(
-    completer: &jig::SuperGlueCompleter,
+struct TurnSession<'a> {
+    completer: &'a jig::SuperGlueCompleter,
     spec: &'static AgentSpec,
-    drivers: &[Arc<dyn EngineDriver>],
-    workflows: &WorkflowRegistry,
-    verifiers: &VerifierRegistry,
-    tools: &superglue::tools::ToolRegistry,
-    options: &ChatOptions,
+    drivers: &'a [Arc<dyn EngineDriver>],
+    workflows: &'a WorkflowRegistry,
+    verifiers: &'a VerifierRegistry,
+    tools: &'a superglue::tools::ToolRegistry,
+    options: &'a ChatOptions,
+    debug_chat: bool,
+}
+
+async fn run_turn(
+    session: &TurnSession<'_>,
     transcript: &[ChatMessage],
     user_text: &str,
     volatile: &[String],
-    debug_chat: bool,
 ) -> anyhow::Result<jig::TurnOutcome> {
-    let thinking = options
+    let thinking = session
+        .options
         .reasoning_effort
         .clone()
         .unwrap_or_else(|| "none".to_string());
     let cancel = superglue::cancel::CancellationToken::new();
     AgentRunner::run(
-        completer,
+        session.completer,
         TurnInput {
-            spec,
-            drivers,
-            workflows,
-            verifiers,
-            tools,
+            spec: session.spec,
+            drivers: session.drivers,
+            workflows: session.workflows,
+            verifiers: session.verifiers,
+            tools: session.tools,
             history: &[],
             transcript,
             user_text,
@@ -374,11 +381,12 @@ async fn run_turn(
             unattended: false,
             server_rounds: 500,
             swarm_steps: 1,
-            model: &options.model,
+            model: &session.options.model,
             thinking: &thinking,
-            temperature: options.temperature,
+            temperature: session.options.temperature,
+            steering: None,
         },
-        |piece| render_piece(piece, debug_chat),
+        |piece| render_piece(piece, session.debug_chat),
     )
     .await
     .map_err(|err| anyhow::anyhow!(err.to_string()))
@@ -449,17 +457,19 @@ async fn run_babe(
         print!("\nBabe: ");
         io::stdout().flush().ok();
         let outcome = run_turn(
-            &completer,
-            spec,
-            &drivers,
-            &workflows,
-            &verifiers,
-            &tools,
-            base_opts,
+            &TurnSession {
+                completer: &completer,
+                spec,
+                drivers: &drivers,
+                workflows: &workflows,
+                verifiers: &verifiers,
+                tools: &tools,
+                options: base_opts,
+                debug_chat: false,
+            },
             &transcript,
             line,
             &[],
-            false,
         )
         .await?;
         println!();

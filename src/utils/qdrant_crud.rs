@@ -46,15 +46,14 @@ pub struct UpsertRow {
 }
 
 impl UpsertRow {
-    fn into_point_struct(self) -> Result<PointStruct, QdrantCrudError> {
+    fn into_point_struct(self) -> Result<PointStruct, String> {
         let id: PointId = self.id.into();
         let payload_val = match self.payload {
             None | Some(Value::Null) => Value::Object(Default::default()),
             Some(o @ Value::Object(_)) => o,
-            Some(other) => return Err(QdrantCrudError::PayloadNotObject(other.to_string())),
+            Some(other) => return Err(other.to_string()),
         };
-        let payload = Payload::try_from(payload_val)
-            .map_err(|e| QdrantCrudError::PayloadNotObject(e.to_string()))?;
+        let payload = Payload::try_from(payload_val).map_err(|e| e.to_string())?;
         Ok(PointStruct::new(id, self.vector, payload))
     }
 }
@@ -109,9 +108,11 @@ pub async fn upsert_points(
     rows: Vec<UpsertRow>,
     wait: bool,
 ) -> Result<qdrant_client::qdrant::PointsOperationResponse, QdrantCrudError> {
-    let points: Result<Vec<PointStruct>, QdrantCrudError> =
-        rows.into_iter().map(|r| r.into_point_struct()).collect();
-    let points = points?;
+    let points = rows
+        .into_iter()
+        .map(UpsertRow::into_point_struct)
+        .collect::<Result<Vec<PointStruct>, String>>()
+        .map_err(QdrantCrudError::PayloadNotObject)?;
     let mut req = UpsertPointsBuilder::new(collection, points);
     if wait {
         req = req.wait(true);

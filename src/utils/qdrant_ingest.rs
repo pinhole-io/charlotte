@@ -28,7 +28,7 @@ pub fn ingest_chunks_to_upsert_rows(
         return Err("chunks, ids, and vectors must have the same length");
     }
     let mut out = Vec::with_capacity(chunks.len());
-    for ((chunk, id), vector) in chunks.iter().zip(ids.into_iter()).zip(vectors.into_iter()) {
+    for ((chunk, id), vector) in chunks.iter().zip(ids).zip(vectors) {
         out.push(UpsertRow {
             id,
             vector,

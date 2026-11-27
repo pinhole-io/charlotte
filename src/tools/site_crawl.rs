@@ -120,8 +120,10 @@ impl Tool for SiteCrawlChunksTool {
             max_total_text_chars,
         };
 
-        let mut navigate = crate::browser::NavigateOptions::default();
-        navigate.wait_until = WaitUntil::NetworkIdle;
+        let navigate = crate::browser::NavigateOptions {
+            wait_until: WaitUntil::NetworkIdle,
+            ..Default::default()
+        };
 
         let run = CrawlRunConfig {
             max_depth,

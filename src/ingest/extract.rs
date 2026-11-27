@@ -54,16 +54,44 @@ pub async fn summarize_markdown(
     }))
 }
 
+/// Input specification for [`extract_structured_json`].
+#[derive(Debug, Clone, Copy)]
+pub struct ExtractRequest<'a> {
+    /// Markdown content of the page to extract from.
+    pub markdown: &'a str,
+    /// Optional extraction focus hint.
+    pub focus: Option<&'a str>,
+    /// Optional explicit extraction instruction.
+    pub prompt: Option<&'a str>,
+    /// Optional JSON schema that the extracted object must match.
+    pub schema: Option<&'a Value>,
+}
+
+impl<'a> ExtractRequest<'a> {
+    /// Creates an extraction request for `markdown` with no focus, prompt, or schema overrides.
+    pub fn new(markdown: &'a str) -> Self {
+        Self {
+            markdown,
+            focus: None,
+            prompt: None,
+            schema: None,
+        }
+    }
+}
+
 pub async fn extract_structured_json(
     http: &HttpClient,
     hooks: &HookRegistry,
     guardrails: &GuardrailRegistry,
     base_options: &ChatOptions,
-    markdown: &str,
-    focus: Option<&str>,
-    prompt: Option<&str>,
-    schema: Option<&Value>,
+    request: ExtractRequest<'_>,
 ) -> Result<Value, CharlotteError> {
+    let ExtractRequest {
+        markdown,
+        focus,
+        prompt,
+        schema,
+    } = request;
     let mut opts = base_options.clone();
     opts.max_tool_rounds = 1;
     opts.system_prompt = Some(

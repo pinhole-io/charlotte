@@ -25,6 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 superglue = { git = "https://github.com/pinhole-io/superglue", branch = "main" }
 jig = { path = "../jig" }
+lockbox = { path = "../lockbox", optional = true }
 notepad = { path = "../notepad", default-features = false, features = ["superglue"], optional = true }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
@@ -42,13 +43,15 @@ docx-rs = { version = "0.4.22", optional = true }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"], optional = true }
 
 [dev-dependencies]
+lockbox = { path = "../lockbox", features = ["test-util"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-util"] }
 wiremock = "0.6"
 
 [features]
 default = ["full"]
 full = ["cli", "documents", "notepad", "qdrant"]
-harn = []
+host = ["dep:lockbox"]
+harn = ["host"]
 serve = ["dep:axum", "dep:tower", "dep:http-body-util", "dep:tracing-subscriber"]
 cli = ["dep:clap"]
 documents = ["dep:calamine", "dep:docx-rs", "dep:pdf-extract", "dep:zip"]
@@ -75,4 +78,7 @@ required-features = ["full"]
 name = "babe_chat"
 path = "examples/babe_chat.rs"
 required-features = ["full"]
+
+[patch."https://github.com/pinhole-io/superglue"]
+superglue = { path = "../superglue" }
 

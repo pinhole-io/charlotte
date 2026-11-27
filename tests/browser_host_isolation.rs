@@ -11,8 +11,10 @@ async fn hosted_sessions_isolate_cookies_pages_and_tabs() {
         .mount(&server)
         .await;
 
-    let mut browser = BrowserConfig::default();
-    browser.url_policy = UrlPolicy::permissive();
+    let browser = BrowserConfig {
+        url_policy: UrlPolicy::permissive(),
+        ..BrowserConfig::default()
+    };
     let host = BrowserHost::start(BrowserHostConfig {
         backend: BrowserBackendKind::Playwright,
         browser,

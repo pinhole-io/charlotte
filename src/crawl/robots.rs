@@ -119,7 +119,7 @@ impl RobotsFetcher {
         }
         let text = std::str::from_utf8(&body)
             .map_err(|_| CharlotteError::msg("robots.txt body is not UTF-8"))?;
-        Ok(SimpleRobots::parse(&text))
+        Ok(SimpleRobots::parse(text))
     }
 }
 

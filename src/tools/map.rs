@@ -68,10 +68,9 @@ impl Tool for MapTool {
             ),
             cache_ttl: None,
             page_cache: None,
-            navigate: {
-                let mut n = crate::browser::NavigateOptions::default();
-                n.wait_until = WaitUntil::NetworkIdle;
-                n
+            navigate: crate::browser::NavigateOptions {
+                wait_until: WaitUntil::NetworkIdle,
+                ..Default::default()
             },
             link_limit_per_page: arguments
                 .get("link_limit_per_page")
